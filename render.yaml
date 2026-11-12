@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: adab-tarix-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
