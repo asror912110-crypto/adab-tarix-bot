@@ -829,6 +829,60 @@ def t_group(gid: int, u=Depends(teacher)):
                 "hard": hard, "progress": prog, "link": link, "qr": qr}
 
 
+def drop_member(c, gid, uid):
+    c.execute(members.delete().where(members.c.group_id == gid, members.c.user_id == uid))
+    # boshqa guruhi qolmagan o'quvchi yana mehmonga aylanadi (telefon ro'yxatida bo'lmasa)
+    left = c.execute(sa.select(sa.func.count()).select_from(members).where(members.c.user_id == uid)).scalar()
+    r = c.execute(sa.select(users.c.role, users.c.phone).where(users.c.id == uid)).first()
+    if r and r[0] == "student" and not left:
+        if not c.execute(sa.select(whitelist).where(whitelist.c.phone == (norm_phone(r[1]) or "-"))).first():
+            c.execute(users.update().where(users.c.id == uid).values(role="user"))
+
+
+@app.post("/api/t/group/{gid}/remove")
+async def t_member_remove(gid: int, req: Request, u=Depends(teacher)):
+    b = await req.json()
+    with engine.begin() as c:
+        own_group(c, gid, u)
+        drop_member(c, gid, int(b.get("user_id") or 0))
+    return {"ok": True}
+
+
+@app.post("/api/t/group/{gid}/rename")
+async def t_group_rename(gid: int, req: Request, u=Depends(teacher)):
+    b = await req.json()
+    name = str(b.get("name", "")).strip()[:80]
+    if len(name) < 2:
+        raise HTTPException(400, "Guruh nomini kiriting")
+    with engine.begin() as c:
+        own_group(c, gid, u)
+        c.execute(groups.update().where(groups.c.id == gid).values(name=name))
+    return {"ok": True}
+
+
+@app.delete("/api/t/group/{gid}")
+def t_group_delete(gid: int, u=Depends(teacher)):
+    with engine.begin() as c:
+        own_group(c, gid, u)
+        for uid, in c.execute(sa.select(members.c.user_id).where(members.c.group_id == gid)).all():
+            drop_member(c, gid, uid)
+        c.execute(homework.delete().where(homework.c.group_id == gid))
+        c.execute(progress.delete().where(progress.c.group_id == gid))
+        c.execute(groups.delete().where(groups.c.id == gid))
+    return {"ok": True}
+
+
+@app.delete("/api/t/hw/{hid}")
+def t_hw_delete(hid: int, u=Depends(teacher)):
+    with engine.begin() as c:
+        h = c.execute(sa.select(homework).where(homework.c.id == hid)).mappings().first()
+        if not h:
+            raise HTTPException(404, "Vazifa topilmadi")
+        own_group(c, h["group_id"], u)
+        c.execute(homework.delete().where(homework.c.id == hid))
+    return {"ok": True}
+
+
 @app.post("/api/t/progress")
 async def t_progress(req: Request, u=Depends(teacher)):
     """Guruhda o'tilgan mavzular ro'yxati (istalgan darsliklardan)."""

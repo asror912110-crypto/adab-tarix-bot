@@ -1,6 +1,7 @@
 """Ma'lumotlar bazasi: SQLite (lokal) yoki PostgreSQL (DATABASE_URL orqali)."""
 import json
 import os
+import re
 import time
 import sqlalchemy as sa
 
@@ -108,9 +109,28 @@ def migrate():
             c.execute(sa.text("ALTER TABLE users ADD COLUMN book VARCHAR(12)"))
 
 
+JUNK = re.compile("O\u2018quvchi\\s+(?:\\S{1,3}\\s+)?Guruh Sana Ball\\s*")
+
+
+def fix_content():
+    """PDF sahifa sarlavhasidan savol variantiga qo'shilib qolgan matnni bazadagi savollardan tozalaydi."""
+    with engine.begin() as c:
+        rows = c.execute(sa.select(questions.c.id, questions.c.data).where(
+            sa.cast(questions.c.data, sa.Text).like("%Guruh Sana Ball%"))).all()
+        for qid, d in rows:
+            d = dict(d)
+            if isinstance(d.get("o"), list):
+                d["o"] = [JUNK.sub("", x) for x in d["o"]]
+            if isinstance(d.get("q"), str):
+                d["q"] = JUNK.sub("", d["q"])
+            c.execute(questions.update().where(questions.c.id == qid).values(data=d))
+    return len(rows)
+
+
 def init(content_path):
     md.create_all(engine)
     migrate()
+    fix_content()
     seed(content_path)
 
 

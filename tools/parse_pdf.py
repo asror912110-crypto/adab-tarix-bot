@@ -152,8 +152,10 @@ def parse_tests(items, images, doc, sec2, v2=False):
             qs.append({"num": t["t"].strip(), "sp": [], "p": t["p"], "col": t["col"], "y": t["y0"]})
             badge_ids |= {id(x) for x in t["parts"]}
     qs.sort(key=lambda q: (q["p"], q["col"], q["y"]))
+    # birinchi sahifada eng birinchi savoldan yuqoridagi matn — sahifa sarlavhasi (F.I.Sh., Guruh, Sana...)
+    top0 = min((q["y"] for q in qs if q["p"] == 0), default=0) - 6
     for s in seq:
-        if s["c"] == WHITE or id(s) in badge_ids:
+        if s["c"] == WHITE or id(s) in badge_ids or (s["p"] == 0 and s["y0"] < top0):
             continue
         c = [q for q in qs if (q["p"], q["col"], q["y"] - 5) <= (s["p"], s["col"], s["y0"])]
         if c:

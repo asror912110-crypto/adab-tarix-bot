@@ -22,6 +22,11 @@ const IC = {
   book: 'M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 19V5',
   check: 'M5 12l5 5 9-10',
   arrow: 'M5 12h14M13 6l6 6-6 6',
+  users: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
+  pin: 'M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.800 7 11 7 11zM12 12.5a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z',
+  share: 'M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M12 3v13M7 8l5-5 5 5',
+  plus: 'M12 5v14M5 12h14',
+  gear: 'M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4M16 4v4M8 10v4M14 16v4',
   flame: 'M12 22a6 6 0 0 0 6-6c0-4-3-6-4-10-2 2-3 4-3 6-1-1-2-2-2-4-2 2-3 5-3 8a6 6 0 0 0 6 6z',
 };
 function ic(name, size) {
@@ -60,7 +65,27 @@ function toast(t) {
 const haptic = k => { try { tg && tg.HapticFeedback && (k === 'ok' || k === 'bad' ? tg.HapticFeedback.notificationOccurred(k === 'ok' ? 'success' : 'error') : tg.HapticFeedback.impactOccurred('light')); } catch (e) {} };
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const mmss = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+function sheet(o) {
+  return new Promise(res => {
+    const vals = {};
+    const close = v => { bg.remove(); res(v); };
+    const inputs = (o.fields || []).map(f => {
+      vals[f.key] = f.value || '';
+      const ta = f.type === 'textarea';
+      const el = h(ta ? 'textarea' : 'input', { class: 'field', type: ta ? null : (f.type || 'text'), placeholder: f.placeholder, value: ta ? null : (f.value || ''), oninput: e => vals[f.key] = e.target.value }, ta ? (f.value || '') : null);
+      return h('label', { class: 'fl' }, h('span', null, f.label), el);
+    });
+    const bg = h('div', { class: 'sheet-bg', onclick: e => { if (e.target === bg) close(null); } },
+      h('div', { class: 'sheet' }, h('div', { class: 'grab' }), h('div', { class: 'hd', style: 'font-size:18px' }, o.title),
+        o.text ? h('p', { class: 'mute sm', style: 'margin:6px 0 0' }, o.text) : null, o.body || null, inputs,
+        o.ok === null ? null : h('button', { class: 'btn ' + (o.danger ? 'd' : 'y') + ' mt2', onclick: () => close(vals) }, o.ok || 'Tayyor'),
+        h('button', { class: 'btn ghost', onclick: () => close(null) }, o.cancel || (o.ok === null ? 'Yopish' : 'Bekor qilish'))));
+    document.body.append(bg);
+    const first = bg.querySelector('input,textarea'); if (first) setTimeout(() => first.focus(), 60);
+  });
+}
 function show(node, nav, view) {
+  document.querySelectorAll('.sheet-bg').forEach(x => x.remove());
   clearInterval(S.timer); clearTimeout(S.auto); S.view = view || null;
   app.replaceChildren(node);
   document.querySelectorAll('.nav').forEach(x => x.remove());
@@ -81,8 +106,11 @@ function header(title, sub, onBack) {
       onBack && !(tg && tg.initData) ? h('button', { class: 'pill', onclick: onBack }, '← Orqaga') : null),
     h('h1', null, title), sub ? h('div', { class: 'sub' }, sub) : null);
 }
+const isTeacher = () => S.me && (S.me.user.role === 'teacher' || S.me.user.role === 'admin');
 function navBar() {
-  const items = [['home', 'home', 'Asosiy'], ['top', 'trophy', 'Reyting'], ['duel', 'zap', 'Bellashuv'], ['profile', 'user', 'Profil']];
+  const items = [['home', 'home', 'Asosiy'], ['top', 'trophy', 'Reyting'], ['duel', 'zap', 'Bellashuv']];
+  if (isTeacher()) items.push(['groups', 'users', 'Guruhlar']);
+  items.push(['profile', 'user', 'Profil']);
   return h('div', { class: 'nav' }, h('div', null, items.map(([k, i, t]) =>
     h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k) }, h('i', null, ic(i, 22)), t))));
 }
@@ -93,10 +121,12 @@ function refreshMe(view, redraw) {
 }
 const go = guard(async tab => {
   S.tab = tab;
-  if (tab === 'home') await home();
-  else if (tab === 'top') await topView();
+  if (tab === 'home') return home();
+  if (tab === 'profile') return profile();
+  show(h('div', { class: 'load' }, 'Yuklanmoqda…'), true);   // tarmoqni kutayotganda bo‘sh ekran qolmasin
+  if (tab === 'top') await topView();
   else if (tab === 'duel') await duelHome();
-  else await profile();
+  else await teacherHome();
 });
 
 /* ---------------- boshlash ---------------- */
@@ -195,33 +225,39 @@ function tile(icon, tone, t, s, fn, n) {
 
 /* ---------------- mavzu tanlash ---------------- */
 async function loadTopics() { if (!S.topics) S.topics = await api('/topics'); return S.topics; }
-const setup = guard(async (mode, onPick) => {
+const setup = guard(async (mode, hw) => {
   const T = await loadTopics();
-  const cov = new Set(mode === 'hw' ? [] : (S.me.covered || []));   // guruhda o‘tilgan mavzular
-  const st = { book: cov.size ? 'cov' : (S.me.user.book || T.books[0].id), sel: new Set(), count: mode === 'exam' ? 20 : mode === 'cards' ? 15 : mode === 'match' ? 5 : 15 };
+  const cov = new Set(hw ? hw.cov : (S.me.covered || []));   // guruhda o‘tilgan mavzular
+  const st = { book: cov.size ? 'cov' : (S.me.user.book || T.books[0].id), sel: new Set(), count: mode === 'exam' ? 20 : mode === 'cards' ? 15 : mode === 'match' ? 5 : 15, title: '', dl: '' };
   if (st.book !== 'cov' && !T.books.some(b => b.id === st.book)) st.book = T.books[0].id;
-  const title = { exam: 'Imtihon rejimi', match: 'Moslashtirish', cards: 'Savol-javob kartochkalari', hw: 'Vazifa uchun mavzular' }[mode];
+  const title = { exam: 'Imtihon', match: 'Moslashtirish', cards: 'Savol-javob', hw: 'Uyga vazifa berish' }[mode];
+  const sub = { exam: 'Har savolga 15 soniya. Bitta urinish — natija oxirida.', hw: hw && hw.name + ' · o‘quvchilarga botdan xabar boradi', match: 'Juftini toping — vaqt chegarasi yo‘q', cards: 'O‘zingizni sinang — ball berilmaydi' }[mode];
   const key = { exam: 'tests', hw: 'tests', match: 'matches', cards: 'cards' }[mode];
   const counts = { exam: [10, 20, 30], hw: [10, 15, 20, 30], match: [3, 5, 10], cards: [10, 15, 30] }[mode];
+  const leave = () => hw ? guard(groupView)(hw.gid) : go('home');
   const draw = () => {
     const list = T.topics.filter(t => (st.book === 'cov' ? cov.has(t.id) : t.subj + t.grade === st.book) && t[key] > 0);
     const y = window.scrollY;
-    show(h('div', null, header(title, mode === 'exam' ? 'Har savolga 15 soniya. Bitta urinish — natija oxirida.' : 'Mavzularni belgilang yoki barchasidan aralash oling', () => onPick ? onPick(null) : go('home')),
+    show(h('div', null, header(title, sub, leave),
       h('div', { class: 'wrap' },
-        h('div', { class: 'sec', style: 'margin-top:4px' }, 'Darslik'),
+        hw ? [h('label', { class: 'fl', style: 'margin-top:0' }, h('span', null, 'Vazifa nomi'), h('input', { class: 'field', placeholder: 'Masalan: 3-dars bo‘yicha test', value: st.title, oninput: e => st.title = e.target.value })),
+          h('label', { class: 'fl' }, h('span', null, 'Topshirish muddati (ixtiyoriy)'), h('input', { class: 'field', type: 'date', value: st.dl, oninput: e => st.dl = e.target.value }))] : null,
+        h('div', { class: 'sec', style: hw ? '' : 'margin-top:4px' }, 'Savollar soni'),
+        h('div', { class: 'chips' }, counts.map(n => h('button', { class: 'chip' + (n === st.count ? ' on' : ''), onclick: () => { st.count = n; draw(); } }, n + ' ta'))),
+        h('div', { class: 'sec' }, 'Darslik'),
         h('div', { class: 'chips' }, cov.size ? h('button', { class: 'chip' + (st.book === 'cov' ? ' on' : ''), onclick: () => { st.book = 'cov'; st.sel.clear(); draw(); } }, '✓ O‘tilgan mavzular') : null,
           T.books.map(b => h('button', { class: 'chip' + (b.id === st.book ? ' on' : ''), onclick: () => { st.book = b.id; st.sel.clear(); draw(); } }, bookShort(b)))),
-        h('div', { class: 'sec' }, 'Savollar soni'),
-        h('div', { class: 'chips' }, counts.map(n => h('button', { class: 'chip' + (n === st.count ? ' on' : ''), onclick: () => { st.count = n; draw(); } }, n + ' ta'))),
         h('div', { class: 'sec' }, 'Mavzular', h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, st.sel.size ? st.sel.size + ' ta tanlandi' : 'barchasidan aralash')),
         list.length ? h('div', { class: 'list' }, list.map(t => h('button', { class: 'li' + (st.sel.has(t.id) ? ' on' : ''), onclick: () => { st.sel.has(t.id) ? st.sel.delete(t.id) : st.sel.add(t.id); haptic(); draw(); } },
           h('div', { class: 'check' }, st.sel.has(t.id) ? '✓' : ''),
           h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title), h('small', null, bookName(t) + ' · ' + t[key] + ' ta')))))
           : h('div', { class: 'card c mute' }, 'Bu yerda savollar yo‘q')),
-      h('div', { class: 'foot' }, h('button', { class: 'btn y', disabled: !list.length, onclick: () => {
+      h('div', { class: 'foot' }, h('button', { class: 'btn y', disabled: !list.length, onclick: guard(async () => {
         const topics = st.sel.size ? [...st.sel] : list.map(t => t.id);
-        onPick ? onPick({ topics, count: st.count, names: list.filter(t => topics.includes(t.id)).map(t => t.title) }) : startSession({ mode, topics, count: st.count });
-      } }, onPick ? 'Tanlash' : 'Boshlash →'))));
+        if (!hw) return startSession({ mode, topics, count: st.count });
+        const r = await api('/t/hw', { group_id: hw.gid, title: st.title.trim() || 'Uyga vazifa', topics, count: st.count, deadline: st.dl || null });
+        toast('Vazifa yuborildi: ' + r.count + ' ta savol'); groupView(hw.gid);
+      }) }, hw ? 'Vazifani yuborish' : 'Boshlash →'))));
     window.scrollTo(0, y);
   };
   draw();
@@ -229,8 +265,10 @@ const setup = guard(async (mode, onPick) => {
 
 /* ---------------- test o'yini ---------------- */
 const startSession = guard(async params => {
+  const prev = S.tab;
+  show(h('div', { class: 'load' }, 'Savollar tayyorlanmoqda…'));
   let s;
-  try { s = await api('/start', params); } catch (e) { if (e.status === 402) return limitView(e.message); throw e; }
+  try { s = await api('/start', params); } catch (e) { if (e.status === 402) return limitView(e.message); go(prev || 'home'); throw e; }
   play(s);
 });
 function limitView(msg) {
@@ -262,8 +300,9 @@ function play(s) {
     catch (e) { if (e.status === 409 && s.mode === 'daily') return play(await api('/start', { mode: 'daily' })); go('home'); throw e; }
   });
   const quit = () => {
-    if (s.mode === 'daily') { if (confirm('Chiqasizmi? Keyinroq davom ettirishingiz mumkin.')) { clearInterval(S.timer); go('home'); } return; }
-    if (s.reveal || confirm('Yakunlaysizmi? Javob berilmagan savollar xato hisoblanadi.')) finish();
+    if (s.mode === 'daily') return sheet({ title: 'Chiqasizmi?', text: 'Topshiriq saqlanadi — bugun istalgan payt davom ettirasiz.', ok: 'Chiqish', cancel: 'Davom etish' }).then(v => { if (v) { clearInterval(S.timer); clearTimeout(S.auto); go('home'); } });
+    if (s.reveal) return finish();
+    sheet({ title: 'Yakunlaysizmi?', text: 'Javob berilmagan savollar xato hisoblanadi.', ok: 'Yakunlash', cancel: 'Davom etish' }).then(v => { if (v) finish(); });
   };
   back(quit);
   // javobdan keyin keyingi savolga o‘zi o‘tadi (natijani o‘qib olishga yetarli vaqt bilan)
@@ -288,7 +327,7 @@ function play(s) {
       h('div', { class: 'qtop' },
         h('div', { class: 'row' }, h('button', { class: 'x', onclick: quit }, '✕'), h('span', { class: 'f' }, names[s.mode] + ' · ' + Math.min(n + 1, Q.length) + ' / ' + Q.length),
           left != null || (s.per_q && s.per_q[q.kind]) ? timerEl : null,
-          h('button', { class: 'x', title: 'Xato haqida xabar', onclick: () => reportQ(q) }, '⚑')),
+          s.per_q ? null : h('button', { class: 'x', title: 'Xato haqida xabar', onclick: () => reportQ(q) }, '⚑')),
         h('div', { class: 'bar g', style: 'margin-top:10px' }, h('i', { style: 'width:' + (100 * n / Q.length) + '%;background:var(--blue)' }))),
       h('div', { class: 'wrap', style: 'padding-top:8px' }, body), foot ? h('div', { class: 'foot' }, foot) : null));
     window.scrollTo(0, same ? y : 0);
@@ -380,9 +419,9 @@ function play(s) {
   if (left != null) tick();
   next();
 }
-function reportQ(q) {
-  const t = prompt('Bu savolda qanday xato bor? (qisqacha yozing)');
-  if (t && t.trim()) api('/report', { qid: q.id, text: t.trim() }).then(() => toast('Rahmat! Xabaringiz adminga yuborildi.')).catch(e => toast(e.message));
+async function reportQ(q) {
+  const v = await sheet({ title: 'Savolda xato bormi?', text: (q.q || q.t || '').slice(0, 140), fields: [{ key: 't', label: 'Nima noto‘g‘ri? Qisqacha yozing', type: 'textarea', placeholder: 'Masalan: to‘g‘ri javob B bo‘lishi kerak' }], ok: 'Yuborish' });
+  if (v && v.t.trim()) api('/report', { qid: q.id, text: v.t.trim() }).then(() => toast('Rahmat! Xabaringiz adminga yuborildi.')).catch(e => toast(e.message));
 }
 
 /* ---------------- natija ---------------- */
@@ -405,7 +444,7 @@ function result(r) {
       r.badges.length ? [h('div', { class: 'sec' }, 'Yangi yutuq!'), h('div', { class: 'list' }, r.badges.map(b => h('div', { class: 'li' }, h('div', { class: 'n', style: 'font-size:18px' }, BICON[b.code] || '🏅'), h('div', { class: 't' }, h('b', null, b.name), h('small', null, b.desc)))))] : null,
       h('button', { class: 'btn mt2', onclick: () => go(r.mode === 'duel' ? 'duel' : 'home') }, 'Davom etish'),
       h('div', { class: 'sec' }, 'Javoblar tahlili'),
-      h('div', { class: 'list' }, r.review.map((q, k) => h('div', { class: 'rev' }, h('div', { class: 'q' }, (k + 1) + '. ' + (q.q || q.t)), ans(q)))))));
+      h('div', { class: 'list' }, r.review.map((q, k) => h('div', { class: 'rev' }, h('div', { class: 'q' }, (k + 1) + '. ' + (q.q || q.t)), ans(q), h('button', { class: 'flag', onclick: () => reportQ(q) }, '⚑ Savolda xato bor')))))));
   if (pct >= 70) haptic('ok');
 }
 
@@ -466,72 +505,74 @@ async function profile(keep) {
   if (!keep) refreshMe('profile', () => profile(true));
   const { user: u, level: L } = S.me;
   back(null);
-  const role = { user: 'Mehmon', student: 'Adab School o‘quvchisi', teacher: 'O‘qituvchi', admin: 'Administrator' }[u.role];
-  const join = guard(async () => { const c = prompt('O‘qituvchi bergan guruh kodini kiriting:'); if (!c) return; const r = await api('/join', { code: c }); toast('«' + r.name + '» guruhiga qo‘shildingiz'); S.me = await api('/me'); profile(true); });
+  const role = { user: 'Mehmon', student: 'O‘quvchi', teacher: 'O‘qituvchi', admin: 'Administrator' }[u.role];
+  const acc = S.me.stats.total ? Math.round(100 * S.me.stats.ok / S.me.stats.total) + '%' : '—';
+  const stat = (v, t) => h('div', { class: 'card c', style: 'padding:14px 6px' }, h('div', { class: 'hd', style: 'font-size:20px' }, v), h('div', { class: 'sm mute bold' }, t));
   show(h('div', null, h('div', { class: 'top' }, h('div', { class: 'brand' }, h('img', { src: '/static/logo-white.png' }), h('span', { class: 'pill' }, role)),
     h('h1', null, u.name), h('div', { class: 'sub' }, L.idx + '-daraja · ' + L.name + ' · ' + u.xp + ' ball')),
     h('div', { class: 'wrap' },
-      u.role === 'teacher' || u.role === 'admin' ? h('button', { class: 'cta', onclick: guard(teacherHome) }, h('div', { class: 'ic' }, '👩‍🏫'), h('div', null, h('b', null, 'O‘qituvchi paneli'), h('small', null, 'Guruhlar, vazifalar, natijalar')), h('div', { class: 'go' }, '→')) : null,
-      u.role === 'admin' ? [h('div', { class: 'mt' }), h('button', { class: 'cta', onclick: guard(adminHome) }, h('div', { class: 'ic' }, '⚙️'), h('div', null, h('b', null, 'Admin paneli'), h('small', null, 'Savollar, foydalanuvchilar, shikoyatlar')), h('div', { class: 'go' }, '→'))] : null,
+      u.role === 'admin' ? h('button', { class: 'cta', style: 'margin-bottom:6px', onclick: guard(adminHome) }, h('div', { class: 'ic' }, ic('gear', 22)), h('div', null, h('b', null, 'Admin paneli'), h('small', null, 'Savollar, foydalanuvchilar, xabarlar')), h('div', { class: 'go' }, '→')) : null,
       h('div', { class: 'sec' }, 'Ko‘rsatkichlar'),
-      h('div', { class: 'grid' },
-        h('div', { class: 'card c' }, h('div', { class: 'hd', style: 'font-size:22px' }, S.me.stats.ok), h('div', { class: 'sm mute bold' }, 'to‘g‘ri javob')),
-        h('div', { class: 'card c' }, h('div', { class: 'hd', style: 'font-size:22px' }, '🔥 ' + u.best_streak), h('div', { class: 'sm mute bold' }, 'eng uzun seriya'))),
-      h('div', { class: 'sec' }, 'Yutuqlar'),
-      h('div', { class: 'bdg' }, S.me.all_badges.map(b => h('div', { class: S.me.badges.includes(b.code) ? '' : 'off', title: b.desc }, h('i', null, BICON[b.code] || '🏅'), b.name))),
+      h('div', { class: 'grid', style: 'grid-template-columns:repeat(3,1fr);gap:10px' }, stat(S.me.stats.ok, 'to‘g‘ri javob'), stat(acc, 'aniqlik'), stat(u.best_streak, 'eng uzun seriya')),
+      h('div', { class: 'sec' }, 'Yutuqlar', h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, S.me.badges.length + ' / ' + S.me.all_badges.length)),
+      h('div', { class: 'bdg' }, S.me.all_badges.map(b => h('button', { class: S.me.badges.includes(b.code) ? '' : 'off', onclick: () => toast(b.name + ' — ' + b.desc) }, h('i', null, BICON[b.code] || '🏅'), b.name))),
       h('div', { class: 'sec' }, 'Sozlamalar'),
       h('div', { class: 'list' },
-        h('button', { class: 'li', onclick: () => guard(onboarding)(true) }, h('div', { class: 'n' }, '📘'), h('div', { class: 't' }, h('b', null, 'Darslik'), h('small', null, S.me.groups.length ? 'Guruhda o‘tilgan mavzular bo‘yicha' : (u.book ? u.book.replace(/([a-z]+)(\d+)/, (m, sb, g) => SUBJ[sb] + ' · ' + g + '-sinf darsligi') : 'tanlanmagan'))), h('span', { class: 'mute' }, '›')),
-        h('button', { class: 'li', onclick: join }, h('div', { class: 'n' }, '👥'), h('div', { class: 't' }, h('b', null, 'Guruhga qo‘shilish'), h('small', null, S.me.groups.length ? S.me.groups.map(g => g.name).join(', ') : 'O‘qituvchi kodi orqali')), h('span', { class: 'mute' }, '›')),
-        h('button', { class: 'li', onclick: guard(async () => { await api('/me', { remind: !u.remind }); S.me = await api('/me'); profile(true); }) }, h('div', { class: 'n' }, '🔔'), h('div', { class: 't' }, h('b', null, 'Kunlik eslatma'), h('small', null, 'Har kuni kechqurun bot eslatadi')), h('span', { class: 'badge ' + (u.remind ? 'g' : 'm') }, u.remind ? 'yoqilgan' : 'o‘chiq'))),
+        S.me.groups.length
+          ? h('div', { class: 'li' }, h('div', { class: 'n' }, ic('users', 17)), h('div', { class: 't' }, h('b', null, 'Guruhim'), h('small', null, S.me.groups.map(g => g.name).join(', '))))
+          : h('button', { class: 'li', onclick: () => guard(onboarding)(true) }, h('div', { class: 'n' }, ic('book', 17)), h('div', { class: 't' }, h('b', null, 'Darslik'), h('small', null, u.book ? u.book.replace(/([a-z]+)(\d+)/, (m, sb, g) => SUBJ[sb] + ' · ' + g + '-sinf darsligi') : 'tanlanmagan')), h('span', { class: 'mute' }, '›')),
+        h('button', { class: 'li', onclick: guard(async () => { await api('/me', { remind: !u.remind }); S.me = await api('/me'); profile(true); }) }, h('div', { class: 'n' }, ic('repeat', 17)), h('div', { class: 't' }, h('b', null, 'Kunlik eslatma'), h('small', null, 'Topshiriq bajarilmagan kuni soat 18:00 da bot eslatadi')), h('span', { class: 'badge ' + (u.remind ? 'g' : 'm') }, u.remind ? 'yoqilgan' : 'o‘chiq'))),
+      S.me.groups.length ? null : h('div', { class: 'limit sm mute', style: 'margin-top:12px' }, 'Guruhga qo‘shilish uchun o‘qituvchingiz yuborgan havolani bosing yoki QR kodni skanerlang.'),
       h('div', { class: 'mt2 c sm mute' }, 'ID: ' + u.id))), true, 'profile');
 }
 
 /* ---------------- o'qituvchi ---------------- */
 async function teacherHome() {
   const gs = await api('/t/groups');
+  back(null);
   const add = guard(async () => {
-    const n = prompt('Yangi guruh nomi (masalan: Tarix 1-daraja, dush-chor 15:00):'); if (!n) return;
-    await api('/t/group', { name: n }); teacherHome();
+    const v = await sheet({ title: 'Yangi guruh', fields: [{ key: 'name', label: 'Guruh nomi', placeholder: 'Masalan: Tarix 1-daraja, dush-chor 15:00' }], ok: 'Yaratish' });
+    if (!v || !v.name.trim()) return;
+    await api('/t/group', { name: v.name.trim() }); const all = await api('/t/groups'); groupView(all[all.length - 1].id);
   });
-  show(h('div', null, header('O‘qituvchi paneli', 'Guruh yarating va kodini o‘quvchilarga bering', () => go('profile')),
+  show(h('div', null, h('div', { class: 'top' }, h('div', { class: 'brand' }, h('img', { src: '/static/logo-white.png' })), h('h1', null, 'Guruhlarim'), h('div', { class: 'sub' }, 'Vazifa berish, o‘tilgan mavzular va natijalar')),
     h('div', { class: 'wrap' },
-      gs.length ? h('div', { class: 'list' }, gs.map(g => h('button', { class: 'li', onclick: guard(() => groupView(g.id)) }, h('div', { class: 'n' }, '👥'),
-        h('div', { class: 't' }, h('b', null, g.name), h('small', null, g.members + ' o‘quvchi · ' + g.homework + ' vazifa · kod: ' + g.code)), h('span', { class: 'mute' }, '›'))))
-        : h('div', { class: 'card c mute' }, 'Hali guruh yo‘q'),
-      h('button', { class: 'btn mt2', onclick: add }, '+ Guruh yaratish'))));
+      gs.length ? h('div', { class: 'list' }, gs.map(g => h('button', { class: 'li', onclick: guard(() => groupView(g.id)) }, h('div', { class: 'n' }, ic('users', 17)),
+        h('div', { class: 't' }, h('b', null, g.name), h('small', null, g.members + ' o‘quvchi · ' + g.homework + ' vazifa')), h('span', { class: 'mute' }, '›'))))
+        : h('div', { class: 'card c' }, h('p', { class: 'bold', style: 'margin-top:0' }, 'Hali guruh yo‘q'), h('p', { class: 'mute sm' }, 'Guruh yarating, havolasini o‘quvchilarga yuboring — ular bir bosishda qo‘shiladi.')),
+      h('button', { class: 'btn mt2', onclick: add }, '+ Guruh yaratish'))), true, 'groups');
 }
 async function groupView(gid) {
   const g = await api('/t/group/' + gid);
-  const newHw = () => setup('hw', guard(async pick => {
-    if (!pick) return groupView(gid);
-    const title = prompt('Vazifa nomi:', pick.names.length === 1 ? pick.names[0].slice(0, 60) : 'Uyga vazifa') || 'Uyga vazifa';
-    const dl = prompt('Topshirish muddati (YYYY-OO-KK), bo‘sh qoldirish mumkin:', '') || null;
-    const r = await api('/t/hw', { group_id: gid, title, topics: pick.topics, count: pick.count, deadline: dl });
-    toast('Vazifa yuborildi: ' + r.count + ' ta savol'); groupView(gid);
-  }));
-  show(h('div', null, header(g.name, 'kod: ' + g.code + ' · ' + g.members.length + ' o‘quvchi', () => teacherHome()),
+  const share = () => { const url = 'https://t.me/share/url?url=' + encodeURIComponent(g.link) + '&text=' + encodeURIComponent('«' + g.name + '» guruhiga qo‘shiling — Adab School tarix boti'); tg && tg.openTelegramLink ? tg.openTelegramLink(url) : window.open(url); };
+  const invite = () => sheet({ title: 'O‘quvchilarni taklif qilish', text: 'O‘quvchi QR kodni skanerlaydi yoki havolani bosadi — guruhga o‘zi qo‘shiladi.', ok: null,
+    body: h('div', { class: 'c' }, h('img', { src: g.qr, alt: 'QR', style: 'width:210px;height:210px;margin-top:8px' }),
+      h('div', { class: 'row mt', style: 'justify-content:center' }, h('button', { class: 'btn sm', onclick: share }, 'Havolani ulashish'),
+        h('button', { class: 'btn sm w', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(g.link); toast('Havola nusxalandi'); } }, 'Nusxalash'))) });
+  const kick = m => guard(async () => { if (await sheet({ title: m.name, text: 'Bu hafta: ' + m.week_total + ' ta savol · jami ' + m.xp + ' ball', ok: 'Guruhdan chiqarish', danger: true, cancel: 'Yopish' })) { await api('/t/group/' + gid + '/remove', { user_id: m.id }); groupView(gid); } });
+  const more = guard(async () => {
+    const v = await sheet({ title: 'Guruh sozlamalari', fields: [{ key: 'name', label: 'Guruh nomi', value: g.name }], ok: 'Saqlash', cancel: 'Yopish',
+      body: h('button', { class: 'flag', style: 'margin-top:14px', onclick: guard(async () => { if (await sheet({ title: 'Guruh o‘chirilsinmi?', text: '«' + g.name + '» guruhi, uning vazifalari va a’zolar ro‘yxati o‘chadi. Bu amalni qaytarib bo‘lmaydi.', ok: 'O‘chirish', danger: true })) { await api('/t/group/' + gid, null, 'DELETE'); go('groups'); } }) }, 'Guruhni o‘chirish') });
+    if (v && v.name.trim() && v.name.trim() !== g.name) { await api('/t/group/' + gid + '/rename', { name: v.name.trim() }); groupView(gid); }
+  });
+  const act = (icon, tone, t, sub, fn) => h('button', { class: 'tile', style: 'padding:12px 10px 13px', onclick: fn }, h('div', { class: 'em ' + tone, style: 'width:40px;height:40px;margin-bottom:8px' }, ic(icon, 20)), h('b', { style: 'font-size:13.5px' }, t), h('small', null, sub));
+  show(h('div', null, header(g.name, g.members.length + ' o‘quvchi', () => go('groups')),
     h('div', { class: 'wrap' },
-      h('button', { class: 'btn y', onclick: newHw }, '+ Uyga vazifa berish'),
-      h('div', { class: 'sec' }, 'O‘quvchilarni taklif qilish'),
-      h('div', { class: 'card c' }, h('img', { src: g.qr, alt: 'QR', style: 'width:190px;height:190px' }),
-        h('div', { class: 'sm mute' }, 'O‘quvchi QR kodni skanerlaydi yoki havolani bosadi — guruhga o‘zi qo‘shiladi'),
-        h('div', { class: 'row mt', style: 'justify-content:center' },
-          h('button', { class: 'btn sm', onclick: () => { const url = 'https://t.me/share/url?url=' + encodeURIComponent(g.link) + '&text=' + encodeURIComponent('«' + g.name + '» guruhiga qo‘shiling — Adab School tarix boti'); tg && tg.openTelegramLink ? tg.openTelegramLink(url) : window.open(url); } }, '📨 Havolani ulashish'),
-          h('button', { class: 'btn sm w', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(g.link); toast('Havola nusxalandi'); } }, 'Nusxalash'))),
-      h('div', { class: 'sec' }, 'O‘tilgan mavzular'),
-      h('button', { class: 'cta', style: 'box-shadow:none;border:1.5px solid var(--line)', onclick: () => guard(progressView)(g) }, h('div', { class: 'ic', style: 'background:var(--blue)' }, '📍'),
-        h('div', null, h('b', null, g.progress.length ? g.progress.length + ' ta mavzu o‘tilgan' : 'Belgilanmagan'),
-          h('small', null, g.progress.length ? 'Oxirgisi: ' + (t => bookShort(t) + ' — ' + t.num + '. ' + t.title)(g.progress[g.progress.length - 1]) : 'Belgilasangiz, o‘quvchilarga faqat o‘tilgan mavzulardan savol chiqadi')), h('div', { class: 'go' }, '→')),
+      h('div', { class: 'grid', style: 'grid-template-columns:repeat(3,1fr);gap:10px' },
+        act('plus', 'y', 'Vazifa berish', 'test tuzish', () => setup('hw', { gid, name: g.name, cov: g.progress.map(t => t.id) })),
+        act('pin', 'b', 'O‘tilgan mavzular', g.progress.length ? g.progress.length + ' ta' : 'belgilanmagan', () => guard(progressView)(g)),
+        act('share', 'g', 'Taklif qilish', 'havola va QR', invite)),
+      g.progress.length ? null : h('div', { class: 'limit sm', style: 'margin-top:12px;border-color:var(--yellow);background:var(--yellow-l)' }, h('b', null, 'O‘tilgan mavzular belgilanmagan. '), 'Hozir o‘quvchilarga savollar barcha darsliklardan aralash chiqmoqda.'),
       h('div', { class: 'sec' }, 'Vazifalar'),
-      g.homework.length ? h('div', { class: 'list' }, g.homework.map(x => h('button', { class: 'li', onclick: guard(() => hwView(x.id, gid)) }, h('div', { class: 'n' }, '📚'),
+      g.homework.length ? h('div', { class: 'list' }, g.homework.map(x => h('button', { class: 'li', onclick: guard(() => hwView(x.id, gid)) }, h('div', { class: 'n' }, ic('book', 17)),
         h('div', { class: 't' }, h('b', null, x.title), h('small', null, x.count + ' ta savol' + (x.deadline ? ' · muddat ' + x.deadline : ''))), h('div', { class: 'v' }, x.done + '/' + g.members.length))))
         : h('div', { class: 'card c mute sm' }, 'Hali vazifa berilmagan'),
-      h('div', { class: 'sec' }, 'O‘quvchilar (oxirgi 7 kun)'),
-      g.members.length ? h('div', { class: 'card', style: 'padding:6px 10px' }, h('table', { class: 't' }, h('tr', null, h('th', null, 'O‘quvchi'), h('th', { class: 'r' }, 'Savol'), h('th', { class: 'r' }, 'Aniqlik'), h('th', { class: 'r' }, '🔥')),
-        g.members.map(m => h('tr', null, h('td', null, m.name), h('td', { class: 'r' }, m.week_total), h('td', { class: 'r' }, m.week_total ? Math.round(100 * m.week_ok / m.week_total) + '%' : '—'), h('td', { class: 'r' }, m.streak)))))
-        : h('div', { class: 'card c mute sm' }, 'O‘quvchilar Profil → «Guruhga qo‘shilish» orqali ' + g.code + ' kodini kiritadi'),
-      g.hard.length ? [h('div', { class: 'sec' }, 'Eng qiyin savollar'), h('div', { class: 'list' }, g.hard.map(x => h('div', { class: 'rev' }, h('div', { class: 'q' }, x.q), h('div', { class: 'a wrong' }, x.pct + '% to‘g‘ri (' + x.n + ' ta javob) · ' + x.topic))))] : null)));
+      h('div', { class: 'sec' }, 'O‘quvchilar', h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, 'oxirgi 7 kun')),
+      g.members.length ? h('div', { class: 'card', style: 'padding:6px 10px' }, h('table', { class: 't' }, h('tr', null, h('th', null, 'O‘quvchi'), h('th', { class: 'r' }, 'Savol'), h('th', { class: 'r' }, 'Aniqlik'), h('th', { class: 'r' }, 'Seriya')),
+        g.members.map(m => h('tr', { onclick: kick(m) }, h('td', null, m.name), h('td', { class: 'r' }, m.week_total), h('td', { class: 'r' }, m.week_total ? Math.round(100 * m.week_ok / m.week_total) + '%' : '—'), h('td', { class: 'r' }, m.streak)))))
+        : h('div', { class: 'card c mute sm' }, 'Hali o‘quvchi yo‘q. «Taklif qilish» orqali havola yoki QR kodni yuboring.'),
+      g.hard.length ? [h('div', { class: 'sec' }, 'Eng qiyin savollar'), h('div', { class: 'list' }, g.hard.map(x => h('div', { class: 'rev' }, h('div', { class: 'q' }, x.q), h('div', { class: 'a wrong' }, x.pct + '% to‘g‘ri (' + x.n + ' ta javob) · ' + x.topic))))] : null,
+      h('button', { class: 'btn ghost mt2', onclick: more }, 'Guruh sozlamalari'))));
 }
 async function progressView(g) {
   const T = await loadTopics();
@@ -556,19 +597,23 @@ async function progressView(g) {
 }
 async function hwView(hid, gid) {
   const r = await api('/t/hw/' + hid);
-  show(h('div', null, header(r.title, r.total + ' ta savol' + (r.deadline ? ' · muddat ' + r.deadline : ''), () => guard(groupView)(gid)),
+  const del = guard(async () => { if (await sheet({ title: 'Vazifa o‘chirilsinmi?', text: '«' + r.title + '» o‘quvchilar ro‘yxatidan ham yo‘qoladi.', ok: 'O‘chirish', danger: true })) { await api('/t/hw/' + hid, null, 'DELETE'); groupView(gid); } });
+  const done = r.rows.filter(m => m.done).length;
+  show(h('div', null, header(r.title, r.total + ' ta savol · ' + done + ' / ' + r.rows.length + ' o‘quvchi bajardi' + (r.deadline ? ' · muddat ' + r.deadline : ''), () => guard(groupView)(gid)),
     h('div', { class: 'wrap' },
-      h('div', { class: 'card', style: 'padding:6px 10px' }, h('table', { class: 't' }, h('tr', null, h('th', null, 'O‘quvchi'), h('th', { class: 'r' }, 'Natija'), h('th', { class: 'r' }, 'Vaqt'), h('th', { class: 'r' }, 'Sana')),
-        r.rows.map(m => h('tr', null, h('td', null, m.name), h('td', { class: 'r ' + (m.done ? '' : 'wrong') }, m.done ? m.score + '/' + r.total : 'bajarmagan'), h('td', { class: 'r' }, m.done ? mmss(m.secs) : ''), h('td', { class: 'r' }, m.date ? m.date.slice(5) : ''))))),
+      r.rows.length ? h('div', { class: 'card', style: 'padding:6px 10px' }, h('table', { class: 't' }, h('tr', null, h('th', null, 'O‘quvchi'), h('th', { class: 'r' }, 'Natija'), h('th', { class: 'r' }, 'Vaqt'), h('th', { class: 'r' }, 'Sana')),
+        r.rows.map(m => h('tr', null, h('td', null, m.name), h('td', { class: 'r ' + (m.done ? '' : 'wrong') }, m.done ? m.score + '/' + r.total : 'bajarmagan'), h('td', { class: 'r' }, m.done ? mmss(m.secs) : ''), h('td', { class: 'r' }, m.date ? m.date.slice(5) : '')))))
+        : h('div', { class: 'card c mute sm' }, 'Guruhda hali o‘quvchi yo‘q'),
       h('div', { class: 'sec' }, 'Savollar bo‘yicha'),
-      h('div', { class: 'list' }, r.questions.map(q => h('div', { class: 'rev' }, h('div', { class: 'q' }, q.q), h('div', { class: 'a ' + (q.n && q.ok / q.n < .5 ? 'wrong' : 'good') }, q.ok + '/' + q.n + ' to‘g‘ri · javob: ' + q.right)))))));
+      h('div', { class: 'list' }, r.questions.map(q => h('div', { class: 'rev' }, h('div', { class: 'q' }, q.q), h('div', { class: 'a ' + (q.n && q.ok / q.n < .5 ? 'wrong' : 'good') }, (q.n ? q.ok + '/' + q.n + ' to‘g‘ri · ' : '') + 'javob: ' + q.right)))),
+      h('button', { class: 'btn ghost mt2', onclick: del }, 'Vazifani o‘chirish'))));
 }
 
 /* ---------------- admin ---------------- */
 async function adminHome() {
   const s = await api('/a/stats');
   const st = (v, t) => h('div', { class: 'card c' }, h('div', { class: 'hd', style: 'font-size:20px' }, v), h('div', { class: 'sm mute bold' }, t));
-  show(h('div', null, header('Admin paneli', null, () => go('profile')),
+  show(h('div', null, header('Admin paneli', 'Bot boshqaruvi', () => go('profile')),
     h('div', { class: 'wrap' },
       h('div', { class: 'grid' }, st(s.users, 'foydalanuvchi'), st(s.students, 'o‘quvchi'), st(s.active_today, 'bugun faol'), st(s.answers_today, 'bugungi javoblar'), st(s.questions, 'savol'), st(s.topics, 'mavzu')),
       h('div', { class: 'sec' }, 'Boshqaruv'),

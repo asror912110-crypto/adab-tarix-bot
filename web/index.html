@@ -186,10 +186,24 @@ table.t th{color:var(--mute);font-size:11.5px;text-transform:uppercase;border-to
 .nums button{flex:1;min-width:52px;max-width:74px;padding:9px 0 7px;border-radius:14px;border:1.5px solid var(--line);background:var(--cream);font-family:Montserrat;font-weight:900;font-size:19px;line-height:1.1}
 .nums button small{display:block;font-family:Nunito;font-size:10.5px;font-weight:800}
 .nums button.on{background:var(--navy);border-color:var(--navy);color:#fff;box-shadow:3px 3px 0 var(--yellow)} .nums button.on small{color:#fff;opacity:.8}
+
+/* ichki oynacha */
+.sheet-bg{position:fixed;inset:0;background:rgba(0,19,66,.45);z-index:60;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--cream);width:100%;max-width:560px;border-radius:24px 24px 0 0;padding:10px 18px calc(14px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto}
+.grab{width:42px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 14px}
+.fl{display:block;margin-top:14px} .fl span{display:block;font-weight:800;font-size:13px;color:var(--mute);margin-bottom:6px}
+.btn.d{background:var(--red);color:#fff}
+.flag{display:inline-block;margin-top:8px;font-size:12.5px;font-weight:800;color:var(--mute);text-decoration:underline;text-underline-offset:3px}
+.bdg button{background:#fff;border:1.5px solid var(--line);border-radius:16px;padding:12px 6px;text-align:center;font-size:12px;font-weight:800;line-height:1.2}
+.bdg button i{font-style:normal;font-size:28px;display:block;margin-bottom:4px}
+.bdg button.off{opacity:.35;filter:grayscale(1)}
+.cta .ic .ic-svg{display:flex}
+table.t tr[onclick]{cursor:pointer}
+.nav button{font-size:11px}
 </style>
 </head>
 <body>
 <div id="app"><div class="load">Yuklanmoqda…</div></div>
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=11"></script>
 </body>
 </html>
