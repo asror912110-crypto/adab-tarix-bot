@@ -70,6 +70,10 @@ badges = T("badges", sa.Column("user_id", sa.BigInteger, primary_key=True, autoi
 
 kv = T("kv", sa.Column("k", sa.String(40), primary_key=True), sa.Column("v", sa.String(200)))
 
+progress = T("progress", sa.Column("group_id", sa.BigInteger, primary_key=True, autoincrement=False),
+             sa.Column("topic_ids", sa.JSON))   # har fan bo'yicha oxirgi o'tilgan mavzu
+daily_sets = T("daily_sets", sa.Column("k", sa.String(40), primary_key=True), sa.Column("qids", sa.JSON))
+
 
 def init(content_path):
     md.create_all(engine)

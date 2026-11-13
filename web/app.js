@@ -122,7 +122,7 @@ async function home() {
           : 'Adab School o‘quvchisimisiz? Botga /start yuborib, telefon raqamingizni tasdiqlang — cheklov olib tashlanadi.')) : null,
       S.me.daily_done
         ? h('div', { class: 'cta done' }, h('div', { class: 'ic', style: 'background:var(--green)' }, '✓'), h('div', null, h('b', null, 'Kunlik topshiriq bajarildi'), h('small', null, 'Ertaga yangi savollar kutmoqda')))
-        : h('button', { class: 'cta y', onclick: () => startSession({ mode: 'daily' }) }, h('div', { class: 'ic' }, '📅'), h('div', null, h('b', null, 'Kunlik topshiriq'), h('small', null, '15 ta savol · +30 bonus ball')), h('div', { class: 'go' }, '→')),
+        : h('button', { class: 'cta y', onclick: () => startSession({ mode: 'daily' }) }, h('div', { class: 'ic' }, '📅'), h('div', null, h('b', null, 'Kunlik topshiriq'), h('small', null, 'O‘tilgan mavzulardan · 100% bo‘lguncha · +30 ball')), h('div', { class: 'go' }, '→')),
       hw.length ? [h('div', { class: 'sec' }, 'Uyga vazifa'), h('div', { class: 'list' }, hw.map(x =>
         h('button', { class: 'li', onclick: () => startSession({ mode: 'hw', hw: x.id }) }, h('div', { class: 'n' }, '📚'),
           h('div', { class: 't' }, h('b', null, x.title), h('small', null, x.group + ' · ' + x.count + ' ta savol' + (x.deadline ? ' · muddat: ' + x.deadline : ''))),
@@ -152,7 +152,7 @@ const setup = guard(async (mode, onPick) => {
     const list = T.topics.filter(t => t.grade === st.grade && (!st.subj || t.subj === st.subj) && t[key] > 0);
     const subs = [...new Set(T.topics.filter(t => t.grade === st.grade).map(t => t.subj))];
     const y = window.scrollY;
-    show(h('div', null, header(title, mode === 'exam' ? 'Har bir savolga 1 daqiqa. Natija oxirida ko‘rsatiladi.' : 'Mavzularni belgilang yoki barchasidan aralash oling', () => onPick ? onPick(null) : go('home')),
+    show(h('div', null, header(title, mode === 'exam' ? 'Har savolga 40 soniya. Bitta urinish — natija oxirida.' : 'Mavzularni belgilang yoki barchasidan aralash oling', () => onPick ? onPick(null) : go('home')),
       h('div', { class: 'wrap' },
         h('div', { class: 'chips' }, T.grades.map(g => h('button', { class: 'chip' + (g === st.grade ? ' on' : ''), onclick: () => { st.grade = g; st.subj = null; st.sel.clear(); draw(); } }, g + '-sinf'))),
         subs.length > 1 ? h('div', { class: 'chips mt' }, [null, ...subs].map(s => h('button', { class: 'chip' + (s === st.subj ? ' on' : ''), onclick: () => { st.subj = s; st.sel.clear(); draw(); } }, s ? SUBJ[s] : 'Barchasi'))) : null,
@@ -186,29 +186,47 @@ function limitView(msg) {
 }
 function play(s) {
   const Q = s.questions;
-  let i = Q.findIndex(q => q.your === undefined); if (i < 0) i = Q.length;
-  let left = s.left_sec, done = false;
+  // kunlik topshiriqda (s.repeat) xato qilingan savol to‘g‘ri topilguncha navbatga qaytadi
+  const pend = q => s.repeat ? q.ok !== true : q.your === undefined;
+  const queue = Q.filter(pend);
+  let cur = null, done = false, left = s.left_sec, qleft = null, onTimeout = null;
   const names = { exam: 'Imtihon', daily: 'Kunlik topshiriq', mistakes: 'Xatolar ustida ishlash', match: 'Moslashtirish', cards: 'Savol-javob', hw: 'Uyga vazifa', duel: 'Bellashuv' };
   const finish = guard(async () => { if (done) return; done = true; clearInterval(S.timer); result(await api('/finish', { sid: s.sid })); });
-  const quit = () => { if (s.reveal && s.mode !== 'daily' ? true : confirm(s.mode === 'daily' ? 'Chiqasizmi? Keyinroq davom ettirishingiz mumkin.' : 'Yakunlaysizmi? Javob berilmagan savollar xato hisoblanadi.')) { s.mode === 'daily' ? (clearInterval(S.timer), go('home')) : finish(); } };
+  const quit = () => {
+    if (s.mode === 'daily') { if (confirm('Chiqasizmi? Keyinroq davom ettirishingiz mumkin.')) { clearInterval(S.timer); go('home'); } return; }
+    if (s.reveal || confirm('Yakunlaysizmi? Javob berilmagan savollar xato hisoblanadi.')) finish();
+  };
   back(quit);
-  const next = () => { i++; i >= Q.length ? finish() : draw(); };
+  const next = () => {
+    if (cur && pend(cur)) { cur._o = null; queue.push(cur); }
+    cur = queue.shift();
+    cur ? draw() : finish();
+  };
   const timerEl = h('span', { class: 'timer' });
-  const tick = () => { if (left == null) return; timerEl.textContent = '⏱ ' + mmss(Math.max(0, left)); timerEl.classList.toggle('hot', left <= 30); if (left <= 0) finish(); left--; };
+  const paint = v => { timerEl.textContent = '⏱ ' + mmss(Math.max(0, v)); timerEl.classList.toggle('hot', v <= (left != null ? 30 : 10)); };
+  const tick = () => {
+    if (left != null) { paint(left); if (left <= 0) finish(); left--; }
+    else if (qleft != null) { paint(qleft); if (qleft <= 0) { qleft = null; const f = onTimeout; onTimeout = null; f && f(); } else qleft--; }
+  };
   function frame(body, foot) {
-    const q = Q[i];
-    const y = window.scrollY, same = frame.last === i; frame.last = i;
+    const q = cur, n = Q.length - Q.filter(pend).length;
+    const y = window.scrollY, same = frame.last === q; frame.last = q;
     app.replaceChildren(h('div', null,
       h('div', { class: 'qtop' },
-        h('div', { class: 'row' }, h('button', { class: 'x', onclick: quit }, '✕'), h('span', { class: 'f' }, names[s.mode] + ' · ' + (i + 1) + ' / ' + Q.length), left != null ? timerEl : null,
+        h('div', { class: 'row' }, h('button', { class: 'x', onclick: quit }, '✕'), h('span', { class: 'f' }, names[s.mode] + ' · ' + Math.min(n + 1, Q.length) + ' / ' + Q.length),
+          left != null || (s.per_q && s.per_q[q.kind]) ? timerEl : null,
           h('button', { class: 'x', title: 'Xato haqida xabar', onclick: () => reportQ(q) }, '⚑')),
-        h('div', { class: 'bar g', style: 'margin-top:10px' }, h('i', { style: 'width:' + (100 * i / Q.length) + '%;background:var(--blue)' }))),
+        h('div', { class: 'bar g', style: 'margin-top:10px' }, h('i', { style: 'width:' + (100 * n / Q.length) + '%;background:var(--blue)' }))),
       h('div', { class: 'wrap', style: 'padding-top:8px' }, body), foot ? h('div', { class: 'foot' }, foot) : null));
     window.scrollTo(0, same ? y : 0);
   }
+  const tag = (q, t) => h('div', { class: 'tag', style: q.tries ? 'background:var(--red-l);color:#b3261e' : '' }, q.tries ? 'Qayta urinish' : t);
+  const more = q => queue.length > 0 || pend(q);
   function draw() {
     document.querySelectorAll('.nav').forEach(x => x.remove()); document.body.classList.add('noscroll-pad');
-    const q = Q[i];
+    const q = cur;
+    onTimeout = null; qleft = s.per_q && s.per_q[q.kind] ? s.per_q[q.kind] : null;
+    if (qleft != null) paint(qleft);
     if (q.kind === 'test') drawTest(q); else if (q.kind === 'match') drawMatch(q); else drawCard(q);
   }
   function drawTest(q) {
@@ -217,29 +235,38 @@ function play(s) {
     const order = q._o || (q._o = fixed ? [0, 1, 2, 3] : shuffle([0, 1, 2, 3]));
     let st = { sel: null, res: null };
     const render = () => frame([
-      h('div', { class: 'qcard' }, h('div', { class: 'tag' }, 'Test'), h('div', { class: 'q' }, q.q), q.img ? h('img', { src: '/media/' + q.img }) : null),
+      h('div', { class: 'qcard' }, tag(q, 'Test'), h('div', { class: 'q' }, q.q), q.img ? h('img', { src: '/media/' + q.img }) : null),
       order.map((oi, k) => {
         let cls = 'opt';
         if (st.res) { cls += ' lock'; if (oi === st.res.right) cls += ' ok'; else if (oi === st.sel) cls += ' bad'; }
         else if (st.sel === oi) cls += ' sel lock'; else if (st.sel != null) cls += ' lock';
         return h('button', { class: cls, onclick: () => choose(oi) }, h('span', { class: 'k' }, 'ABCD'[k]), h('span', null, q.o[oi]));
       }),
-      st.res ? h('div', { class: 'fb ' + (st.res.ok ? 'ok' : 'bad') }, st.res.ok ? '✓ To‘g‘ri! +' + st.res.pts + ' ball' : '✕ Noto‘g‘ri. To‘g‘ri javob: ' + q.o[st.res.right]) : null,
-    ], st.res ? h('button', { class: 'btn', onclick: next }, i + 1 < Q.length ? 'Keyingi savol →' : 'Yakunlash') : null);
+      st.res ? h('div', { class: 'fb ' + (st.res.ok ? 'ok' : 'bad') }, st.res.ok ? '✓ To‘g‘ri! +' + st.res.pts + ' ball'
+        : (st.sel === -1 ? '⏱ Vaqt tugadi. ' : '✕ Noto‘g‘ri. ') + 'To‘g‘ri javob: ' + q.o[st.res.right] + (s.repeat ? ' — bu savol yana so‘raladi' : '')) : null,
+    ], st.res ? h('button', { class: 'btn', onclick: next }, more(q) ? 'Keyingi savol →' : 'Yakunlash') : null);
     const choose = guard(async oi => {
-      if (st.sel != null) return; st.sel = oi; haptic(); render();
+      if (st.sel != null) return; st.sel = oi; qleft = null; onTimeout = null; haptic(); render();
       try {
         const r = await api('/answer', { sid: s.sid, qid: q.id, a: oi });
-        if (s.reveal) { st.res = r; haptic(r.ok ? 'ok' : 'bad'); render(); } else setTimeout(next, 220);
+        q.your = oi; q.tries = (q.tries || 0) + 1;
+        if (s.reveal) { q.ok = r.ok; st.res = r; haptic(r.ok ? 'ok' : 'bad'); render(); } else setTimeout(next, 220);
       } catch (e) { if (e.status === 402) { clearInterval(S.timer); done = true; return limitView(e.message); } if (e.status === 410) return finish(); st.sel = null; render(); throw e; }
     });
+    onTimeout = () => choose(-1);
     render();
   }
   function drawMatch(q) {
     const st = { pick: Array(q.l.length).fill(null), act: 0, res: null, busy: false };
     const L = 'abcdefgh';
+    const submit = guard(async () => {
+      if (st.busy || st.res) return; st.busy = true; qleft = null; onTimeout = null;
+      const r = await api('/answer', { sid: s.sid, qid: q.id, a: st.pick });
+      q.your = st.pick; q.tries = (q.tries || 0) + 1;
+      if (s.reveal) { q.ok = r.ok; st.res = r; haptic(r.ok ? 'ok' : 'bad'); render(); } else next();
+    });
     const render = () => frame([
-      h('div', { class: 'qcard' }, h('div', { class: 'tag' }, 'Moslashtirish'), h('div', { class: 'q' }, q.t),
+      h('div', { class: 'qcard' }, tag(q, 'Moslashtirish'), h('div', { class: 'q' }, q.t),
         h('div', { class: 'sm mute mt' }, 'Chapdagi qatorni tanlang, so‘ng unga mos javobni bosing. Bitta javob ortiqcha.')),
       h('div', { class: 'mcol' }, q.lh || 'Savol'),
       q.l.map((t, k) => {
@@ -257,18 +284,15 @@ function play(s) {
         const nx = st.pick.findIndex(x => x == null); if (nx >= 0) st.act = nx;
         render();
       } }, h('span', { class: 'k l' }, L[k]), q.ri && q.ri[k] ? h('img', { src: '/media/' + q.ri[k] }) : null, h('span', null, t))),
-      st.res ? h('div', { class: 'fb ' + (st.res.ok ? 'ok' : 'bad') }, st.res.ok ? '✓ Hammasi to‘g‘ri! +' + st.res.pts + ' ball' : 'To‘g‘ri juftliklar: ' + st.pick.filter((p, k) => p === st.res.right[k]).length + ' / ' + q.l.length + ' · +' + st.res.pts + ' ball') : null,
-    ], st.res ? h('button', { class: 'btn', onclick: next }, i + 1 < Q.length ? 'Keyingi →' : 'Yakunlash')
-      : h('button', { class: 'btn y', disabled: st.pick.includes(null) || st.busy, onclick: guard(async () => {
-        st.busy = true;
-        const r = await api('/answer', { sid: s.sid, qid: q.id, a: st.pick });
-        if (s.reveal) { st.res = r; haptic(r.ok ? 'ok' : 'bad'); render(); } else next();
-      }) }, 'Tekshirish'));
+      st.res ? h('div', { class: 'fb ' + (st.res.ok ? 'ok' : 'bad') }, st.res.ok ? '✓ Hammasi to‘g‘ri! +' + st.res.pts + ' ball' : 'To‘g‘ri juftliklar: ' + st.pick.filter((p, k) => p === st.res.right[k]).length + ' / ' + q.l.length + ' · +' + st.res.pts + ' ball' + (s.repeat ? ' — yana so‘raladi' : '')) : null,
+    ], st.res ? h('button', { class: 'btn', onclick: next }, more(q) ? 'Keyingi →' : 'Yakunlash')
+      : h('button', { class: 'btn y', disabled: st.pick.includes(null) || st.busy, onclick: submit }, 'Tekshirish'));
+    onTimeout = submit;
     render();
   }
   function drawCard(q) {
     let open = false;
-    const send = k => guard(async () => { await api('/answer', { sid: s.sid, qid: q.id, a: k }); haptic(k ? 'ok' : 'bad'); next(); });
+    const send = k => guard(async () => { await api('/answer', { sid: s.sid, qid: q.id, a: k }); q.your = k; haptic(k ? 'ok' : 'bad'); next(); });
     const render = () => frame([
       h('div', { class: 'qcard flip' }, h('div', null, h('div', { class: 'tag' }, 'Savol'), h('div', { class: 'q' }, q.q),
         open ? h('div', { class: 'ansbox' }, h('div', { class: 'sm mute bold', style: 'margin-bottom:4px' }, 'JAVOB'), q.a) : null)),
@@ -277,8 +301,9 @@ function play(s) {
       : h('button', { class: 'btn', onclick: () => { open = true; render(); } }, 'Javobni ko‘rish'));
     render();
   }
-  if (left != null) { tick(); S.timer = setInterval(tick, 1000); }
-  i >= Q.length ? finish() : draw();
+  if (left != null || s.per_q) S.timer = setInterval(tick, 1000);
+  if (left != null) tick();
+  next();
 }
 function reportQ(q) {
   const t = prompt('Bu savolda qanday xato bor? (qisqacha yozing)');
@@ -298,7 +323,7 @@ function result(r) {
   };
   show(h('div', null, header(r.mode === 'duel' ? 'Bellashuv' : 'Natija', msg, () => go('home')),
     h('div', { class: 'wrap' },
-      h('div', { class: 'ring', style: '--p:' + pct + '%' }, h('div', null, h('span', null, h('b', null, r.score + '/' + r.total), h('small', null, pct + '% to‘g‘ri')))),
+      h('div', { class: 'ring', style: '--p:' + pct + '%' }, h('div', null, h('span', null, h('b', null, r.score + '/' + r.total), h('small', null, r.mode === 'daily' ? 'birinchi urinishda' : pct + '% to‘g‘ri')))),
       h('div', { class: 'row mt2', style: 'justify-content:center' }, h('span', { class: 'badge y' }, '+' + r.xp + ' ball'), h('span', { class: 'badge m' }, '⏱ ' + mmss(r.secs || 0)),
         r.streak ? h('span', { class: 'badge' }, '🔥 ' + r.streak + ' kun') : null),
       r.duel ? duelCard(r.duel) : null,
@@ -353,7 +378,7 @@ async function duelHome() {
 async function duelView(code) {
   const d = await api('/duel/' + code);
   const share = () => { const url = 'https://t.me/share/url?url=' + encodeURIComponent(d.link) + '&text=' + encodeURIComponent('Tarixdan bellashamizmi? ⚔️ Adab School'); tg && tg.openTelegramLink ? tg.openTelegramLink(url) : window.open(url); };
-  show(h('div', null, header('Bellashuv', d.is_member ? d.total + ' ta savol · har biriga 30 soniya' : (d.host || 'O‘quvchi') + ' sizni bellashuvga chaqirdi', () => go('duel')),
+  show(h('div', null, header('Bellashuv', d.is_member ? d.total + ' ta savol · har biriga 30 soniya · bitta urinish' : (d.host || 'O‘quvchi') + ' sizni bellashuvga chaqirdi', () => go('duel')),
     h('div', { class: 'wrap' },
       d.is_member ? duelCard(d) : h('div', { class: 'card c' }, h('div', { style: 'font-size:44px' }, '⚔️'), h('p', { class: 'bold' }, d.can_join ? d.total + ' ta savol. Tayyormisiz?' : 'Bu bellashuvda joy qolmagan')),
       (d.is_member && !d.played) || (!d.is_member && d.can_join) ? h('button', { class: 'btn y mt2', onclick: () => startSession({ mode: 'duel', duel: code }) }, 'Boshlash →') : null,
@@ -410,6 +435,10 @@ async function groupView(gid) {
   show(h('div', null, header(g.name, 'Guruh kodi: ' + g.code + ' · ' + g.members.length + ' o‘quvchi', () => teacherHome()),
     h('div', { class: 'wrap' },
       h('button', { class: 'btn y', onclick: newHw }, '+ Uyga vazifa berish'),
+      h('div', { class: 'sec' }, 'O‘tilgan mavzular'),
+      h('button', { class: 'cta', style: 'box-shadow:none;border:1.5px solid var(--line)', onclick: () => guard(progressView)(g) }, h('div', { class: 'ic', style: 'background:var(--blue)' }, '📍'),
+        h('div', null, h('b', null, g.progress.length ? 'Hozir shu mavzudamiz' : 'Belgilanmagan'),
+          h('small', null, g.progress.length ? g.progress.map(t => SUBJ[t.subj] + ': ' + t.num + '. ' + t.title).join(' · ') : 'Belgilasangiz, kunlik topshiriq faqat o‘tilgan mavzulardan tuziladi')), h('div', { class: 'go' }, '→')),
       h('div', { class: 'sec' }, 'Vazifalar'),
       g.homework.length ? h('div', { class: 'list' }, g.homework.map(x => h('button', { class: 'li', onclick: guard(() => hwView(x.id, gid)) }, h('div', { class: 'n' }, '📚'),
         h('div', { class: 't' }, h('b', null, x.title), h('small', null, x.count + ' ta savol' + (x.deadline ? ' · muddat ' + x.deadline : ''))), h('div', { class: 'v' }, x.done + '/' + g.members.length))))
@@ -419,6 +448,25 @@ async function groupView(gid) {
         g.members.map(m => h('tr', null, h('td', null, m.name), h('td', { class: 'r' }, m.week_total), h('td', { class: 'r' }, m.week_total ? Math.round(100 * m.week_ok / m.week_total) + '%' : '—'), h('td', { class: 'r' }, m.streak)))))
         : h('div', { class: 'card c mute sm' }, 'O‘quvchilar Profil → «Guruhga qo‘shilish» orqali ' + g.code + ' kodini kiritadi'),
       g.hard.length ? [h('div', { class: 'sec' }, 'Eng qiyin savollar'), h('div', { class: 'list' }, g.hard.map(x => h('div', { class: 'rev' }, h('div', { class: 'q' }, x.q), h('div', { class: 'a wrong' }, x.pct + '% to‘g‘ri (' + x.n + ' ta javob) · ' + x.topic))))] : null)));
+}
+async function progressView(g) {
+  const T = await loadTopics();
+  const st = { grade: g.progress.length ? g.progress[0].grade : (T.grades.includes(S.me.user.grade) ? S.me.user.grade : T.grades[0]), last: {} };
+  g.progress.forEach(t => st.last[t.subj] = t.id);
+  const draw = () => {
+    const y = window.scrollY;
+    const subs = [...new Set(T.topics.filter(t => t.grade === st.grade).map(t => t.subj))];
+    show(h('div', null, header('O‘tilgan mavzular', g.name + ' · har fan bo‘yicha oxirgi o‘tilgan mavzuni belgilang', () => guard(groupView)(g.id)),
+      h('div', { class: 'wrap' },
+        h('div', { class: 'chips' }, T.grades.map(x => h('button', { class: 'chip' + (x === st.grade ? ' on' : ''), onclick: () => { st.grade = x; st.last = {}; draw(); } }, x + '-sinf'))),
+        subs.map(sb => { const list = T.topics.filter(t => t.grade === st.grade && t.subj === sb); const li = list.findIndex(t => t.id === st.last[sb]);
+          return [h('div', { class: 'sec' }, SUBJ[sb], h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, li >= 0 ? (li + 1) + ' ta mavzu o‘tilgan' : 'belgilanmagan')),
+            h('div', { class: 'list' }, list.map((t, k) => h('button', { class: 'li' + (k <= li ? ' on' : ''), onclick: () => { st.last[sb] === t.id ? delete st.last[sb] : st.last[sb] = t.id; haptic(); draw(); } },
+              h('div', { class: 'check' }, k <= li ? '✓' : ''), h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title)), k === li ? h('span', { class: 'badge b' }, 'shu yerdamiz') : null)))]; })),
+      h('div', { class: 'foot' }, h('button', { class: 'btn y', onclick: guard(async () => { await api('/t/progress', { group_id: g.id, topics: Object.values(st.last) }); toast('Saqlandi'); groupView(g.id); }) }, 'Saqlash'))));
+    window.scrollTo(0, y);
+  };
+  draw();
 }
 async function hwView(hid, gid) {
   const r = await api('/t/hw/' + hid);

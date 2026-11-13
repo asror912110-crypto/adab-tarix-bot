@@ -18,8 +18,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .db import (answers, badges, duels, engine, groups, homework, kv, members, mistakes, questions,
-                 reports, sessions, topics, users, whitelist, xp_log)
+from .db import (answers, badges, daily_sets, duels, engine, groups, homework, kv, members, mistakes, progress,
+                 questions, reports, sessions, topics, users, whitelist, xp_log)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -49,6 +49,8 @@ BADGES = {
 }
 PTS = {"test": 10, "pair": 5, "card": 2, "daily": 30, "duel": 50}
 BOX_DAYS = [1, 3, 7]
+EXAM_SEC, DUEL_SEC = 40, 30            # imtihon va bellashuvda bir savolga beriladigan vaqt
+PER_Q = {"test": 40, "match": 90}      # kunlik topshiriqda har bir savol uchun taymer
 
 app = FastAPI(title="Adab School Tarix")
 
@@ -171,6 +173,56 @@ def grade_topics(c, grade, subj=None):
         q = q.where(topics.c.subj == subj)
     ids = [r[0] for r in c.execute(q)]
     return ids or [r[0] for r in c.execute(sa.select(topics.c.id))]
+
+
+def covered_topics(c, last_ids):
+    """Har fan bo'yicha 'oxirgi o'tilgan mavzu'gacha bo'lgan barcha mavzular va eng so'nggilari."""
+    covered, recent = [], []
+    for t in c.execute(sa.select(topics).where(topics.c.id.in_(last_ids or ["-"]))).mappings():
+        rows = c.execute(sa.select(topics.c.id).where(topics.c.grade == t["grade"], topics.c.subj == t["subj"],
+                                                      topics.c.ord <= t["ord"]).order_by(topics.c.ord)).all()
+        ids = [r[0] for r in rows]
+        covered += ids
+        recent += ids[-2:]
+    return covered, recent
+
+
+def daily_scope(c, u):
+    """Kunlik topshiriq kimlar uchun umumiy: o'tilgan mavzulari belgilangan guruh yoki butun sinf."""
+    for gid, in c.execute(sa.select(members.c.group_id).where(members.c.user_id == u["id"]).order_by(members.c.group_id)):
+        pr = c.execute(sa.select(progress.c.topic_ids).where(progress.c.group_id == gid)).scalar()
+        if pr:
+            covered, recent = covered_topics(c, pr)
+            if covered:
+                return f"g{gid}", covered, recent
+    return f"s{u['grade'] or 0}", grade_topics(c, u["grade"]), []
+
+
+def daily_qids(c, u):
+    """12 ta savol guruh/sinfdagi hammaga bir xil (o'tilgan mavzulardan, yarmi eng so'nggilaridan)
+    + 3 ta savol o'quvchining o'zi ko'p xato qilgan mavzularidan."""
+    scope, covered, recent = daily_scope(c, u)
+    key = f"{scope}:{today()}"
+    shared = c.execute(sa.select(daily_sets.c.qids).where(daily_sets.c.k == key)).scalar()
+    if not shared:
+        tests = pick(c, "test", recent, 5)
+        tests += pick(c, "test", covered, 10 - len(tests), exclude=tests)
+        ms = pick(c, "match", recent, 1)
+        ms += pick(c, "match", covered, 2 - len(ms), exclude=ms)
+        shared = tests + ms
+        try:
+            with c.begin_nested():
+                c.execute(daily_sets.insert().values(k=key, qids=shared))
+        except Exception:   # boshqa o'quvchi shu lahzada yaratib ulgurgan
+            shared = c.execute(sa.select(daily_sets.c.qids).where(daily_sets.c.k == key)).scalar() or shared
+    wrong = c.execute(sa.select(questions.c.topic_id, sa.func.count()).join(answers, answers.c.qid == questions.c.id).where(
+        answers.c.user_id == u["id"], answers.c.ok == sa.false(), answers.c.day >= today(-30),
+        questions.c.topic_id.in_(covered or ["-"])).group_by(questions.c.topic_id)).all()
+    weak = [t for t, n in sorted(wrong, key=lambda r: -r[1])[:3]]
+    own = pick(c, "test", weak, 3, exclude=shared)
+    own += pick(c, "test", covered, 3 - len(own), exclude=shared + own)
+    kinds = {q["id"]: q["kind"] for q in load_qs(c, shared)}
+    return [i for i in shared if kinds.get(i) == "test"] + own + [i for i in shared if kinds.get(i) == "match"]
 
 
 def load_qs(c, qids):
@@ -297,6 +349,7 @@ def session_payload(c, s, reveal_all=False):
         a = ans.get(str(q["id"]))
         if a is not None:
             p["your"] = a["a"]
+            p["tries"] = a.get("tries", 1)
             if reveal or reveal_all:
                 p["ok"] = a["ok"]
                 if q["kind"] != "card":
@@ -307,8 +360,9 @@ def session_payload(c, s, reveal_all=False):
     left = None
     if s["limit_sec"]:
         left = max(0, s["limit_sec"] - int((now() - s["started"]).total_seconds()))
+    daily = s["mode"] == "daily"
     return {"sid": s["id"], "mode": s["mode"], "reveal": reveal, "limit_sec": s["limit_sec"], "left_sec": left,
-            "questions": out}
+            "repeat": daily, "per_q": PER_Q if daily else None, "questions": out}
 
 
 @app.post("/api/start")
@@ -330,7 +384,7 @@ async def start(req: Request, u=Depends(auth)):
         limit_sec, ref, qids = None, None, []
         if mode == "exam":
             qids = pick(c, "test", tids, count)
-            limit_sec = len(qids) * 60
+            limit_sec = len(qids) * EXAM_SEC
         elif mode == "daily":
             s = c.execute(sa.select(sessions).where(sessions.c.user_id == uid, sessions.c.mode == "daily",
                                                     sessions.c.day == today())).mappings().first()
@@ -338,9 +392,7 @@ async def start(req: Request, u=Depends(auth)):
                 if s["finished"]:
                     raise HTTPException(409, "Bugungi topshiriq bajarilgan. Ertaga yangisi bo'ladi!")
                 return session_payload(c, s)
-            gt = grade_topics(c, u["grade"])
-            qids = pick(c, "test", gt, min(12, remaining))
-            qids += pick(c, "match", gt, min(3, max(0, remaining - len(qids))))
+            qids = daily_qids(c, u)[:remaining]
         elif mode == "mistakes":
             qids = [r[0] for r in c.execute(sa.select(mistakes.c.qid).where(
                 mistakes.c.user_id == uid, mistakes.c.due <= today()).order_by(mistakes.c.due).limit(min(20, remaining)))]
@@ -360,7 +412,7 @@ async def start(req: Request, u=Depends(auth)):
                                                         sessions.c.finished.isnot(None))).first():
                 raise HTTPException(409, "Bu vazifa allaqachon bajarilgan.")
             qids, ref = h["qids"], str(h["id"])
-            limit_sec = len(qids) * 60
+            limit_sec = len(qids) * EXAM_SEC
         elif mode == "duel":
             d = c.execute(sa.select(duels).where(duels.c.code == str(b.get("duel")))).mappings().first()
             if not d:
@@ -373,7 +425,7 @@ async def start(req: Request, u=Depends(auth)):
                                                         sessions.c.ref == d["code"])).first():
                 raise HTTPException(409, "Siz bu bellashuvda qatnashgansiz.")
             qids, ref = d["qids"], d["code"]
-            limit_sec = len(qids) * 30
+            limit_sec = len(qids) * DUEL_SEC
         else:
             raise HTTPException(400, "Noma'lum rejim")
         if not qids:
@@ -409,15 +461,25 @@ async def answer(req: Request, u=Depends(auth)):
             raise HTTPException(404, "Sessiya topilmadi")
         qid = int(b.get("qid") or 0)
         ans = dict(s["ans"] or {})
-        if qid not in s["qids"] or str(qid) in ans:
+        prev = ans.get(str(qid))
+        # kunlik topshiriqda xato qilingan savol to'g'ri topilguncha qayta ishlanadi
+        retry = prev is not None and s["mode"] == "daily" and not prev["ok"]
+        if qid not in s["qids"] or (prev is not None and not retry):
             raise HTTPException(400, "Bu savolga javob berilgan")
         if s["limit_sec"] and (now() - s["started"]).total_seconds() > s["limit_sec"] + 20:
             raise HTTPException(410, "Vaqt tugadi")
-        if u["role"] == "user" and used_today(c, uid) >= FREE_LIMIT:
+        if not retry and u["role"] == "user" and used_today(c, uid) >= FREE_LIMIT:
             raise HTTPException(402, "Bugungi bepul limit tugadi")
         q = load_qs(c, [qid])[0]
         ok, pts = judge(q, b.get("a"))
-        ans[str(qid)] = {"a": b.get("a"), "ok": ok, "pts": pts}
+        if retry:   # qayta urinish: kamroq ball, statistika va limitga qo'shilmaydi
+            pts //= 3
+            ans[str(qid)] = {"a": b.get("a"), "ok": ok, "pts": prev["pts"] + pts, "tries": prev.get("tries", 1) + 1,
+                             "first": False}
+            c.execute(sessions.update().where(sessions.c.id == s["id"]).values(ans=ans))
+            add_xp(c, uid, pts, "ans")
+            return {"ok": ok, "pts": pts, "right": q["data"]["a"]}
+        ans[str(qid)] = {"a": b.get("a"), "ok": ok, "pts": pts, "tries": 1, "first": ok}
         c.execute(sessions.update().where(sessions.c.id == s["id"]).values(ans=ans))
         c.execute(answers.insert().values(user_id=uid, qid=qid, ok=ok, mode=s["mode"], day=today(), ts=now()))
         add_xp(c, uid, pts, "ans")
@@ -452,8 +514,12 @@ async def finish(req: Request, u=Depends(auth)):
         s = dict(s)
         ans = s["ans"] or {}
         res = {"bonus": 0, "badges": [], "duel": None}
+        if not s["finished"] and s["mode"] == "daily" and not all(
+                ans.get(str(q), {}).get("ok") for q in s["qids"]):
+            raise HTTPException(409, "Avval barcha savollarni to'g'ri bajaring")
         if not s["finished"]:
-            score = sum(1 for a in ans.values() if a["ok"])
+            # kunlik topshiriqda natija — birinchi urinishda to'g'ri topilganlar soni
+            score = sum(1 for a in ans.values() if a.get("first", a["ok"]))
             secs = int((now() - s["started"]).total_seconds())
             if s["limit_sec"]:
                 secs = min(secs, s["limit_sec"])
@@ -465,7 +531,7 @@ async def finish(req: Request, u=Depends(auth)):
                     if str(qid) not in ans and not c.execute(sa.select(mistakes).where(
                             mistakes.c.user_id == uid, mistakes.c.qid == qid)).first():
                         c.execute(mistakes.insert().values(user_id=uid, qid=qid, box=0, due=today()))
-            if s["mode"] == "daily" and len(ans) == len(s["qids"]):
+            if s["mode"] == "daily":
                 streak = u["streak"] + 1 if u["last_daily"] == today(-1) else (u["streak"] if u["last_daily"] == today() else 1)
                 c.execute(users.update().where(users.c.id == uid).values(
                     streak=streak, best_streak=max(u["best_streak"] or 0, streak), last_daily=today()))
@@ -685,7 +751,29 @@ def t_group(gid: int, u=Depends(teacher)):
                 if q and ok / n < 0.7:
                     hard.append({"q": q["data"].get("q") or q["data"].get("t"), "kind": q["kind"], "n": n,
                                  "pct": round(100 * ok / n), "topic": tt.get(q["topic_id"], "")})
-        return {"id": gid, "name": g["name"], "code": g["code"], "members": ms, "homework": hws, "hard": hard}
+        pr = c.execute(sa.select(progress.c.topic_ids).where(progress.c.group_id == gid)).scalar() or []
+        prog = [{"id": t["id"], "title": t["title"], "num": t["num"], "subj": t["subj"], "grade": t["grade"]}
+                for t in c.execute(sa.select(topics).where(topics.c.id.in_(pr or ["-"])).order_by(topics.c.ord)).mappings()]
+        return {"id": gid, "name": g["name"], "code": g["code"], "members": ms, "homework": hws, "hard": hard,
+                "progress": prog}
+
+
+@app.post("/api/t/progress")
+async def t_progress(req: Request, u=Depends(teacher)):
+    """Guruh darsda qaysi mavzugacha yetib kelgani: har fan bo'yicha oxirgi o'tilgan mavzu."""
+    b = await req.json()
+    with engine.begin() as c:
+        g = own_group(c, int(b.get("group_id") or 0), u)
+        ids = [t for t in (b.get("topics") or []) if isinstance(t, str)][:10]
+        last = {}
+        for t in c.execute(sa.select(topics).where(topics.c.id.in_(ids or ["-"]))).mappings():
+            last[(t["grade"], t["subj"])] = t["id"]
+        c.execute(progress.delete().where(progress.c.group_id == g["id"]))
+        if last:
+            c.execute(progress.insert().values(group_id=g["id"], topic_ids=list(last.values())))
+        # bugungi umumiy to'plam yangi mavzular bo'yicha qayta tuziladi (hali hech kim boshlamagan bo'lsa)
+        c.execute(daily_sets.delete().where(daily_sets.c.k == f"g{g['id']}:{today()}"))
+    return {"ok": True, "count": len(last)}
 
 
 @app.post("/api/t/hw")
