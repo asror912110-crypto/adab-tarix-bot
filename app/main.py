@@ -52,8 +52,9 @@ BADGES = {
 }
 PTS = {"test": 10, "pair": 5, "card": 2, "daily": 30, "duel": 50}
 BOX_DAYS = [1, 3, 7]
-EXAM_SEC, DUEL_SEC = 40, 30            # imtihon va bellashuvda bir savolga beriladigan vaqt
-PER_Q = {"test": 40, "match": 90}      # kunlik topshiriqda har bir savol uchun taymer
+PER_Q = {"test": 15, "match": 40}      # har bir savolga alohida vaqt (soniya); tugasa keyingisiga o'tadi
+TIMED = {"daily", "exam", "hw", "duel"}
+EXAM_SEC = DUEL_SEC = PER_Q["test"] + 6   # server tomondagi umumiy chegara (zaxira bilan)
 
 app = FastAPI(title="Adab School Tarix")
 POOL = ThreadPoolExecutor(8)
@@ -426,7 +427,7 @@ def session_payload(c, s, reveal_all=False):
         left = max(0, s["limit_sec"] - int((now() - s["started"]).total_seconds()))
     daily = s["mode"] == "daily"
     return {"sid": s["id"], "mode": s["mode"], "reveal": reveal, "limit_sec": s["limit_sec"], "left_sec": left,
-            "repeat": daily, "per_q": PER_Q if daily else None, "questions": out}
+            "repeat": daily, "per_q": PER_Q if s["mode"] in TIMED else None, "questions": out}
 
 
 @app.post("/api/start")
@@ -448,7 +449,7 @@ async def start(req: Request, u=Depends(auth)):
         limit_sec, ref, qids = None, None, []
         if mode == "exam":
             qids = pick(c, "test", tids, count)
-            limit_sec = len(qids) * EXAM_SEC
+            limit_sec = len(qids) * EXAM_SEC + 60
         elif mode == "daily":
             s = c.execute(sa.select(sessions).where(sessions.c.user_id == uid, sessions.c.mode == "daily",
                                                     sessions.c.day == today())).mappings().first()
@@ -476,7 +477,7 @@ async def start(req: Request, u=Depends(auth)):
                                                         sessions.c.finished.isnot(None))).first():
                 raise HTTPException(409, "Bu vazifa allaqachon bajarilgan.")
             qids, ref = h["qids"], str(h["id"])
-            limit_sec = len(qids) * EXAM_SEC
+            limit_sec = len(qids) * EXAM_SEC + 60
         elif mode == "duel":
             d = c.execute(sa.select(duels).where(duels.c.code == str(b.get("duel")))).mappings().first()
             if not d:
@@ -489,7 +490,7 @@ async def start(req: Request, u=Depends(auth)):
                                                         sessions.c.ref == d["code"])).first():
                 raise HTTPException(409, "Siz bu bellashuvda qatnashgansiz.")
             qids, ref = d["qids"], d["code"]
-            limit_sec = len(qids) * DUEL_SEC
+            limit_sec = len(qids) * DUEL_SEC + 60
         else:
             raise HTTPException(400, "Noma'lum rejim")
         if not qids:
@@ -743,6 +744,8 @@ async def join_group(req: Request, u=Depends(auth)):
             raise HTTPException(404, "Bunday kodli guruh topilmadi")
         if not c.execute(sa.select(members).where(members.c.group_id == g["id"], members.c.user_id == u["id"])).first():
             c.execute(members.insert().values(group_id=g["id"], user_id=u["id"]))
+        if u["role"] == "user":   # guruhga qo'shilgan o'quvchida kunlik cheklov bo'lmaydi
+            c.execute(users.update().where(users.c.id == u["id"]).values(role="student"))
         return {"ok": True, "name": g["name"]}
 
 
@@ -1142,6 +1145,8 @@ def background():
 def startup():
     db.init(os.path.join(ROOT, "content", "topics.json"))
     load_content()
+    with engine.begin() as c:   # avval qo'shilgan guruh a'zolari ham cheklovsiz bo'ladi
+        c.execute(users.update().where(users.c.role == "user", users.c.id.in_(sa.select(members.c.user_id))).values(role="student"))
     if BOT_TOKEN and os.environ.get("NO_TG") != "1":
         r = tg("getMe")
         if r and r.get("ok"):
