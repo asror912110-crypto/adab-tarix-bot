@@ -1171,12 +1171,22 @@ def cron_remind(key: str = ""):
     return {"sent": send_reminders()}
 
 
+KEEP = {"t": 0.0}
+
+
 def background():
     offset = 0
     while True:
         try:
             if dt.datetime.now(TZ).hour == REMIND_HOUR:
                 send_reminders()
+            # bepul server 15 daqiqa murojaat bo'lmasa uxlab qoladi — o'zini vaqti-vaqti bilan uyg'oq tutadi
+            if PUBLIC_URL and time.time() - KEEP["t"] > 480:
+                KEEP["t"] = time.time()
+                try:
+                    httpx.get(PUBLIC_URL + "/healthz", timeout=20)
+                except Exception:
+                    pass
             if not PUBLIC_URL and BOT_TOKEN and os.environ.get("POLLING") == "1":
                 r = httpx.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
                               params={"offset": offset, "timeout": 25}, timeout=40).json()

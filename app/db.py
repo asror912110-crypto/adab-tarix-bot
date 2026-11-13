@@ -112,6 +112,9 @@ def migrate():
 JUNK = re.compile("O\u2018quvchi\\s+(?:\\S{1,3}\\s+)?Guruh Sana Ball\\s*")
 
 
+LOGO = "5443ed76de650b4d.jpg"
+
+
 def fix_content():
     """PDF sahifa sarlavhasidan savol variantiga qo'shilib qolgan matnni bazadagi savollardan tozalaydi."""
     with engine.begin() as c:
@@ -124,7 +127,20 @@ def fix_content():
             if isinstance(d.get("q"), str):
                 d["q"] = JUNK.sub("", d["q"])
             c.execute(questions.update().where(questions.c.id == qid).values(data=d))
-    return len(rows)
+        # fon belgisi (logotip) savol rasmi sifatida yopishib qolgan holatlar
+        logo = c.execute(sa.select(questions.c.id, questions.c.data).where(
+            sa.cast(questions.c.data, sa.Text).like("%" + LOGO + "%"))).all()
+        for qid, d in logo:
+            d = dict(d)
+            if d.get("img") == LOGO:
+                d.pop("img")
+            for k in ("li", "ri"):
+                if d.get(k):
+                    d[k] = [None if x == LOGO else x for x in d[k]]
+                    if not any(d[k]):
+                        d.pop(k)
+            c.execute(questions.update().where(questions.c.id == qid).values(data=d))
+    return len(rows) + len(logo)
 
 
 def init(content_path):

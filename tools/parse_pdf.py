@@ -91,6 +91,12 @@ def parse_booklet(path, v2=False):
     items = []   # barcha spanlar (sahifa, ustun, y) tartibida
     images = []
     boxes = []
+    # har sahifada bir xil joyda takrorlanadigan rasm — fon belgisi (logotip), savol rasmi emas
+    seen = {}
+    for pno, page in enumerate(doc):
+        for info in page.get_image_info(xrefs=True):
+            seen.setdefault((info.get("xref"), tuple(round(v) for v in info["bbox"])), set()).add(pno)
+    watermark = {k[0] for k, v in seen.items() if len(v) > 1}
     for pno, page in enumerate(doc):
         W = page.rect.width
         if v2:
@@ -102,7 +108,7 @@ def parse_booklet(path, v2=False):
         items.append((pno, W, sp))
         for info in page.get_image_info(xrefs=True):
             bb = pymupdf.Rect(info["bbox"])
-            if info.get("xref") and bb.width > 12 and not (pno == 0 and bb.y0 < 60):
+            if info.get("xref") and info["xref"] not in watermark and bb.width > 12 and not (pno == 0 and bb.y0 < 60):
                 images.append({"p": pno, "bbox": bb, "xref": info["xref"]})
         for g in page.get_drawings():
             r = g["rect"]
