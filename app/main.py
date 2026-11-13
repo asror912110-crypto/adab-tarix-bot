@@ -50,7 +50,7 @@ BADGES = {
     "duel10": ("Bahodir", "10 ta bellashuv g'alabasi"),
     "clean": ("Xatosiz", "Barcha xatolarini tuzatdi"),
 }
-PTS = {"test": 10, "pair": 5, "card": 2, "daily": 30, "duel": 50}
+PTS = {"test": 10, "pair": 5, "card": 0, "daily": 30, "duel": 50}   # kartochka o'zini sinash uchun, ball berilmaydi
 BOX_DAYS = [1, 3, 7]
 PER_Q = {"test": 15, "match": 40}      # har bir savolga alohida vaqt (soniya); tugasa keyingisiga o'tadi
 TIMED = {"daily", "exam", "hw", "duel"}
@@ -293,7 +293,7 @@ def check_badges(c, uid, sess=None):
         if u["best_streak"] >= n:
             new += award(c, uid, code)
     ok = c.execute(sa.select(sa.func.count()).select_from(answers)
-                   .where(answers.c.user_id == uid, answers.c.ok == sa.true())).scalar()
+                   .where(answers.c.user_id == uid, answers.c.ok == sa.true(), answers.c.mode != "cards")).scalar()
     for n, code in ((100, "c100"), (500, "c500"), (2000, "c2000")):
         if ok >= n:
             new += award(c, uid, code)
@@ -321,8 +321,8 @@ def me(u=Depends(auth)):
         return c.execute(sa.select(
             cnt(mistakes, mistakes.c.user_id == uid, mistakes.c.due <= today()),
             cnt(mistakes, mistakes.c.user_id == uid),
-            cnt(answers, answers.c.user_id == uid, answers.c.ok == sa.true()),
-            cnt(answers, answers.c.user_id == uid),
+            cnt(answers, answers.c.user_id == uid, answers.c.ok == sa.true(), answers.c.mode != "cards"),
+            cnt(answers, answers.c.user_id == uid, answers.c.mode != "cards"),
             cnt(answers, answers.c.user_id == uid, answers.c.day == today()))).first()
 
     def week(c):
@@ -791,7 +791,8 @@ def t_group(gid: int, u=Depends(teacher)):
         st = {}
         if ids:
             for uid, ok, n in c.execute(sa.select(answers.c.user_id, answers.c.ok, sa.func.count()).where(
-                    answers.c.user_id.in_(ids), answers.c.day >= wk).group_by(answers.c.user_id, answers.c.ok)):
+                    answers.c.user_id.in_(ids), answers.c.day >= wk, answers.c.mode != "cards")
+                    .group_by(answers.c.user_id, answers.c.ok)):
                 s = st.setdefault(uid, [0, 0])
                 s[1] += n
                 s[0] += n if ok else 0
@@ -809,7 +810,8 @@ def t_group(gid: int, u=Depends(teacher)):
         if ids:
             okc = sa.func.sum(sa.case((answers.c.ok == sa.true(), 1), else_=0))
             rows = c.execute(sa.select(answers.c.qid, sa.func.count().label("n"), okc.label("ok")).where(
-                answers.c.user_id.in_(ids)).group_by(answers.c.qid).having(sa.func.count() >= 3)).all()
+                answers.c.user_id.in_(ids), answers.c.mode != "cards").group_by(answers.c.qid)
+                .having(sa.func.count() >= 3)).all()
             rows = sorted(rows, key=lambda r: r[2] / r[1])[:15]
             qs = {q["id"]: q for q in load_qs(c, [r[0] for r in rows])}
             tt = {t[0]: t[1] for t in c.execute(sa.select(topics.c.id, topics.c.title))}

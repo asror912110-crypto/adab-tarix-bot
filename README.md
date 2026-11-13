@@ -53,8 +53,8 @@ raqamlarini joylashtiring. O‘quvchi botda «📱 Raqamni yuborish» tugmasini 
 
 ## Ball tizimi
 
-Test — 10 ball, moslashtirishdagi har bir to‘g‘ri juftlik — 5, kartochka — 2, kunlik topshiriq — +30,
-bellashuv g‘alabasi — +50. Darajalar: Shogird → Tolib → Mirzo → Bek → Amir → Vazir → Sohibqiron.
+Test — 10 ball, moslashtirishdagi har bir to‘g‘ri juftlik — 5, kunlik topshiriq — +30,
+bellashuv g‘alabasi — +50. Kartochkalar (savol-javob) o‘zini sinash uchun — ball berilmaydi. Darajalar: Shogird → Tolib → Mirzo → Bek → Amir → Vazir → Sohibqiron.
 
 Xatolar intervalli takrorlanadi: xato savol 1, 3 va 7 kundan keyin qayta so‘raladi; uch marta
 to‘g‘ri javob berilgach ro‘yxatdan chiqadi.

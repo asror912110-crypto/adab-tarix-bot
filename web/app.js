@@ -177,7 +177,7 @@ async function home() {
           tile('timer', 'b', 'Imtihon', 'Vaqtga qarshi test', () => setup('exam')),
           tile('repeat', 'r', 'Xatolarim', S.me.mistakes_all ? S.me.mistakes_all + ' ta savol' : 'Hozircha yo‘q', () => S.me.mistakes_due ? startSession({ mode: 'mistakes' }) : toast(S.me.mistakes_all ? 'Bugun takrorlanadigan xato yo‘q — ertaga qayting' : 'Xatolar ro‘yxati bo‘sh. Zo‘r!'), S.me.mistakes_due),
           tile('link', 'g', 'Moslashtirish', 'Juftini toping', () => setup('match')),
-          tile('layers', 'y', 'Savol-javob', 'Kartochkalar', () => setup('cards'))),
+          tile('layers', 'y', 'Savol-javob', 'O‘zini sinash', () => setup('cards'))),
         h('button', { class: 'duel-card', onclick: () => go('duel') }, h('div', { class: 'f' }, h('b', null, 'Bellashuv'), h('small', null, 'Do‘stingizni chaqiring — g‘olibga +50 ball')), h('span', { class: 'go' }, ic('arrow', 18))),
         free ? h('div', { class: 'limit' },
           h('div', { class: 'row sm bold' }, h('span', { class: 'f' }, 'Bugungi bepul limit'), h('span', null, Math.min(free.used, free.limit) + ' / ' + free.limit + ' savol')),
@@ -371,7 +371,7 @@ function play(s) {
     const render = () => frame([
       h('div', { class: 'qcard flip' }, h('div', null, h('div', { class: 'tag' }, 'Savol'), h('div', { class: 'q' }, q.q),
         open ? h('div', { class: 'ansbox' }, h('div', { class: 'sm mute bold', style: 'margin-bottom:4px' }, 'JAVOB'), q.a) : null)),
-      !open ? h('div', { class: 'sm mute c mt' }, 'Avval javobni o‘zingiz ayting yoki yozib ko‘ring, so‘ng tekshiring') : null,
+      h('div', { class: 'sm mute c mt' }, open ? 'O‘zingizga rost javob bering: «Bilmadim» desangiz, savol keyinroq qayta chiqadi. Kartochkalar uchun ball berilmaydi.' : 'Avval javobni o‘zingiz ayting yoki yozib ko‘ring, so‘ng tekshiring'),
     ], open ? h('div', { class: 'row' }, h('button', { class: 'btn w f', onclick: rate(0) }, '✕ Bilmadim'), h('button', { class: 'btn g f', onclick: rate(1) }, '✓ Bildim'))
       : h('button', { class: 'btn', onclick: () => { open = true; render(); } }, 'Javobni ko‘rish'));
     render();
