@@ -48,7 +48,8 @@ sessions = T("sessions", sa.Column("id", BigInt, primary_key=True, autoincrement
              sa.Column("limit_sec", sa.Integer), sa.Column("score", sa.Integer), sa.Column("total", sa.Integer),
              sa.Column("secs", sa.Integer))
 groups = T("groups", sa.Column("id", BigInt, primary_key=True, autoincrement=True), sa.Column("name", sa.String(80)),
-           sa.Column("teacher_id", sa.BigInteger, index=True), sa.Column("code", sa.String(8), unique=True))
+           sa.Column("teacher_id", sa.BigInteger, index=True), sa.Column("code", sa.String(8), unique=True),
+           sa.Column("grade", sa.Integer))
 members = T("members", sa.Column("group_id", sa.BigInteger, primary_key=True, autoincrement=False),
             sa.Column("user_id", sa.BigInteger, primary_key=True, autoincrement=False))
 homework = T("homework", sa.Column("id", BigInt, primary_key=True, autoincrement=True),
@@ -75,8 +76,17 @@ progress = T("progress", sa.Column("group_id", sa.BigInteger, primary_key=True, 
 daily_sets = T("daily_sets", sa.Column("k", sa.String(40), primary_key=True), sa.Column("qids", sa.JSON))
 
 
+def migrate():
+    """Mavjud jadvallarga keyin qo'shilgan ustunlar."""
+    insp = sa.inspect(engine)
+    if "grade" not in {c["name"] for c in insp.get_columns("groups")}:
+        with engine.begin() as c:
+            c.execute(sa.text("ALTER TABLE groups ADD COLUMN grade INTEGER"))
+
+
 def init(content_path):
     md.create_all(engine)
+    migrate()
     seed(content_path)
 
 

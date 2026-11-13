@@ -12,6 +12,7 @@ import time
 import urllib.parse
 
 import httpx
+import segno
 import sqlalchemy as sa
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -298,7 +299,7 @@ def me(u=Depends(auth)):
                          "remind": u["remind"]},
                 "level": level(u["xp"]), "levels": [{"need": n, "name": nm} for n, nm in LEVELS], "free": free,
                 "daily_done": bool(d and d[0]), "mistakes_due": due, "mistakes_all": allm, "homework": hw,
-                "groups": gs, "badges": bs, "stats": {"ok": ok, "total": tot}, "bot": BOT_NAME["v"],
+                "groups": gs, "covered": daily_scope(c, u)[1] if gs else [], "badges": bs, "stats": {"ok": ok, "total": tot}, "bot": BOT_NAME["v"],
                 "all_badges": [{"code": k, "name": v[0], "desc": v[1]} for k, v in BADGES.items()]}
 
 
@@ -679,7 +680,9 @@ async def join_group(req: Request, u=Depends(auth)):
             raise HTTPException(404, "Bunday kodli guruh topilmadi")
         if not c.execute(sa.select(members).where(members.c.group_id == g["id"], members.c.user_id == u["id"])).first():
             c.execute(members.insert().values(group_id=g["id"], user_id=u["id"]))
-        return {"ok": True, "name": g["name"]}
+        if g["grade"]:   # guruhga qo'shilgan o'quvchining sinfi guruh sinfiga tenglashadi
+            c.execute(users.update().where(users.c.id == u["id"]).values(grade=g["grade"]))
+        return {"ok": True, "name": g["name"], "grade": g["grade"]}
 
 
 def own_group(c, gid, u):
@@ -709,9 +712,10 @@ async def t_group_create(req: Request, u=Depends(teacher)):
     name = str(b.get("name", "")).strip()[:80]
     if len(name) < 2:
         raise HTTPException(400, "Guruh nomini kiriting")
+    grade = b.get("grade") if b.get("grade") in (5, 6, 7, 8, 9, 10, 11) else None
     with engine.begin() as c:
         code = "".join(random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
-        c.execute(groups.insert().values(name=name, teacher_id=u["id"], code=code))
+        c.execute(groups.insert().values(name=name, teacher_id=u["id"], code=code, grade=grade))
     return {"ok": True, "code": code}
 
 
@@ -754,8 +758,10 @@ def t_group(gid: int, u=Depends(teacher)):
         pr = c.execute(sa.select(progress.c.topic_ids).where(progress.c.group_id == gid)).scalar() or []
         prog = [{"id": t["id"], "title": t["title"], "num": t["num"], "subj": t["subj"], "grade": t["grade"]}
                 for t in c.execute(sa.select(topics).where(topics.c.id.in_(pr or ["-"])).order_by(topics.c.ord)).mappings()]
-        return {"id": gid, "name": g["name"], "code": g["code"], "members": ms, "homework": hws, "hard": hard,
-                "progress": prog}
+        link = f"https://t.me/{BOT_NAME['v']}?start=g_{g['code']}"
+        qr = segno.make(link, error="m").svg_data_uri(scale=8, border=2, dark="#001342")
+        return {"id": gid, "name": g["name"], "code": g["code"], "grade": g["grade"], "members": ms, "homework": hws,
+                "hard": hard, "progress": prog, "link": link, "qr": qr}
 
 
 @app.post("/api/t/progress")
@@ -978,6 +984,15 @@ def handle_update(up):
         return
     if text.startswith("/start"):
         arg = text[6:].strip()
+        if arg.startswith("g_"):
+            code = re.sub(r"\W", "", arg[2:]).upper()
+            with engine.begin() as c:
+                g = c.execute(sa.select(groups.c.name).where(groups.c.code == code)).scalar()
+            if g:
+                tg_send(f["id"], f"👋 Assalomu alaykum! Siz <b>{g}</b> guruhiga taklif qilindingiz.\n\n"
+                                 "Qo'shilish va mashqni boshlash uchun pastdagi tugmani bosing 👇",
+                        app_button=True, hash_="?join=" + code)
+                return
         if arg.startswith("duel_"):
             tg_send(f["id"], "⚔️ Sizni tarix bo'yicha bellashuvga chaqirishdi! Qabul qilish uchun ilovani oching 👇",
                     app_button=True, hash_="?duel=" + re.sub(r"\W", "", arg[5:]))

@@ -79,6 +79,11 @@ async function boot() {
     h('h1', null, 'Tarix fanidan ', h('span', { class: 'hl' }, 'bilimingizni'), ' mustahkamlang'),
     h('p', null, 'Bu ilova Telegram ichida ishlaydi. Botni oching va «Ilovani ochish» tugmasini bosing.')));
   try { S.me = await api('/me'); } catch (e) { return show(h('div', { class: 'load' }, e.message)); }
+  const jc = (qs.get('join') || '').replace(/\W/g, '');
+  if (jc) {   // guruh havolasi/QR orqali kirgan o‘quvchi: sinf guruhdan olinadi
+    try { const r = await api('/join', { code: jc }); S.me = await api('/me'); setTimeout(() => toast('«' + r.name + '» guruhiga qo‘shildingiz'), 400); }
+    catch (e) { setTimeout(() => toast(e.message), 400); }
+  }
   if (!S.me.user.grade) return onboarding();
   const dc = (qs.get('duel') || '').replace(/\W/g, '');
   if (dc) { S.tab = 'duel'; return guard(duelView)(dc); }
@@ -143,7 +148,8 @@ function tile(em, t, s, fn, n) {
 async function loadTopics() { if (!S.topics) S.topics = await api('/topics'); return S.topics; }
 const setup = guard(async (mode, onPick) => {
   const T = await loadTopics();
-  const st = { grade: S.me.user.grade, subj: null, sel: new Set(), count: mode === 'exam' ? 20 : mode === 'cards' ? 15 : mode === 'match' ? 5 : 15 };
+  const cov = mode === 'hw' ? [] : (S.me.covered || []);   // guruhda o‘tilgan mavzular oldindan belgilanadi
+  const st = { grade: S.me.user.grade, subj: null, sel: new Set(cov), count: mode === 'exam' ? 20 : mode === 'cards' ? 15 : mode === 'match' ? 5 : 15 };
   if (!T.grades.includes(st.grade)) st.grade = T.grades[0];
   const title = { exam: 'Imtihon rejimi', match: 'Moslashtirish', cards: 'Savol-javob kartochkalari', hw: 'Vazifa uchun mavzular' }[mode];
   const key = { exam: 'tests', hw: 'tests', match: 'matches', cards: 'cards' }[mode];
@@ -159,6 +165,7 @@ const setup = guard(async (mode, onPick) => {
         h('div', { class: 'sec' }, 'Savollar soni'),
         h('div', { class: 'chips' }, counts.map(n => h('button', { class: 'chip' + (n === st.count ? ' on' : ''), onclick: () => { st.count = n; draw(); } }, n + ' ta'))),
         h('div', { class: 'sec' }, 'Mavzular', h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, st.sel.size ? st.sel.size + ' ta tanlandi' : 'barchasi')),
+        cov.length && st.grade === S.me.user.grade ? h('div', { class: 'sm mute', style: 'margin:-4px 2px 10px' }, 'Darsda o‘tilgan mavzular belgilab qo‘yildi. Xohlasangiz o‘zgartiring.') : null,
         list.length ? h('div', { class: 'list' }, list.map(t => h('button', { class: 'li' + (st.sel.has(t.id) ? ' on' : ''), onclick: () => { st.sel.has(t.id) ? st.sel.delete(t.id) : st.sel.add(t.id); haptic(); draw(); } },
           h('div', { class: 'check' }, st.sel.has(t.id) ? '✓' : ''),
           h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title), h('small', null, SUBJ[t.subj] + ' · ' + t[key] + ' ta')))))
@@ -415,7 +422,12 @@ async function profile() {
 /* ---------------- o'qituvchi ---------------- */
 async function teacherHome() {
   const gs = await api('/t/groups');
-  const add = guard(async () => { const n = prompt('Yangi guruh nomi (masalan: 8-A tarix):'); if (!n) return; await api('/t/group', { name: n }); teacherHome(); });
+  const add = guard(async () => {
+    const n = prompt('Yangi guruh nomi (masalan: 8-A tarix):'); if (!n) return;
+    const g = parseInt(prompt('Guruh nechanchi sinf? (6–11)', (n.match(/\d+/) || [''])[0]), 10);
+    if (!(g >= 6 && g <= 11)) return toast('Sinf 6 dan 11 gacha bo‘lishi kerak');
+    await api('/t/group', { name: n, grade: g }); teacherHome();
+  });
   show(h('div', null, header('O‘qituvchi paneli', 'Guruh yarating va kodini o‘quvchilarga bering', () => go('profile')),
     h('div', { class: 'wrap' },
       gs.length ? h('div', { class: 'list' }, gs.map(g => h('button', { class: 'li', onclick: guard(() => groupView(g.id)) }, h('div', { class: 'n' }, '👥'),
@@ -432,9 +444,15 @@ async function groupView(gid) {
     const r = await api('/t/hw', { group_id: gid, title, topics: pick.topics, count: pick.count, deadline: dl });
     toast('Vazifa yuborildi: ' + r.count + ' ta savol'); groupView(gid);
   }));
-  show(h('div', null, header(g.name, 'Guruh kodi: ' + g.code + ' · ' + g.members.length + ' o‘quvchi', () => teacherHome()),
+  show(h('div', null, header(g.name, (g.grade ? g.grade + '-sinf · ' : '') + 'kod: ' + g.code + ' · ' + g.members.length + ' o‘quvchi', () => teacherHome()),
     h('div', { class: 'wrap' },
       h('button', { class: 'btn y', onclick: newHw }, '+ Uyga vazifa berish'),
+      h('div', { class: 'sec' }, 'O‘quvchilarni taklif qilish'),
+      h('div', { class: 'card c' }, h('img', { src: g.qr, alt: 'QR', style: 'width:190px;height:190px' }),
+        h('div', { class: 'sm mute' }, 'O‘quvchi QR kodni skanerlaydi yoki havolani bosadi — guruhga o‘zi qo‘shiladi' + (g.grade ? ', sinfi ' + g.grade + '-sinf deb belgilanadi' : '')),
+        h('div', { class: 'row mt', style: 'justify-content:center' },
+          h('button', { class: 'btn sm', onclick: () => { const url = 'https://t.me/share/url?url=' + encodeURIComponent(g.link) + '&text=' + encodeURIComponent('«' + g.name + '» guruhiga qo‘shiling — Adab School tarix boti'); tg && tg.openTelegramLink ? tg.openTelegramLink(url) : window.open(url); } }, '📨 Havolani ulashish'),
+          h('button', { class: 'btn sm w', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(g.link); toast('Havola nusxalandi'); } }, 'Nusxalash'))),
       h('div', { class: 'sec' }, 'O‘tilgan mavzular'),
       h('button', { class: 'cta', style: 'box-shadow:none;border:1.5px solid var(--line)', onclick: () => guard(progressView)(g) }, h('div', { class: 'ic', style: 'background:var(--blue)' }, '📍'),
         h('div', null, h('b', null, g.progress.length ? 'Hozir shu mavzudamiz' : 'Belgilanmagan'),
