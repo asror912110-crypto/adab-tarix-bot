@@ -77,6 +77,17 @@ def reindex():
             BYKT.setdefault((q["kind"], q["topic_id"]), []).append(q["id"])
 
 
+# Foydalanuvchi yozuvi qisqa muddat xotirada turadi; users jadvali o'zgarganda darhol tozalanadi
+USERS = {}
+
+
+@sa.event.listens_for(engine, "after_execute")
+def _drop_user(conn, clause, multiparams, params, execution_options, result):
+    if isinstance(clause, sa.sql.dml.Update) and clause.table is users:
+        uid = clause.compile().params.get("id_1")
+        USERS.pop(uid, None) if uid is not None else USERS.clear()
+
+
 def par(*fns):
     """Bir nechta mustaqil o'qish so'rovini parallel bajarish."""
     def run(fn):
@@ -142,8 +153,13 @@ def auth(x_init_data: str = Header(default="")):
         tg = check_init_data(x_init_data)
     if not tg:
         raise HTTPException(401, "Telegram orqali kiring")
+    hit = USERS.get(tg["id"])
+    if hit and time.time() - hit[0] < 45:
+        return dict(hit[1])
     with RO.connect() as c:
-        return ensure_user(c, tg)
+        u = ensure_user(c, tg)
+    USERS[tg["id"]] = (time.time(), u)
+    return dict(u)
 
 
 def need(*roles):
