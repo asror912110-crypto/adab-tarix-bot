@@ -4,6 +4,9 @@ const qs = new URLSearchParams(location.search);
 const INIT = (tg && tg.initData) || (qs.get('dev') ? 'dev:' + qs.get('dev') : '');
 const app = document.getElementById('app');
 const S = { me: null, tab: 'home', topics: null, timer: null };
+const BK = { jahon: 'Jahon', uzb: 'O‘zb', tarix: 'Tarix' };
+const bookName = b => SUBJ[b.subj] + ' · ' + b.grade + '-sinf darsligi';
+const bookShort = b => BK[b.subj] + ' ' + b.grade;
 const SUBJ = { jahon: 'Jahon tarixi', uzb: "O‘zbekiston tarixi", tarix: 'Tarix' };
 const BICON = { first: '🚀', streak3: '🔥', streak7: '📆', streak30: '🏆', perfect: '💯', c100: '🎯', c500: '⭐', c2000: '🧠', duel1: '⚔️', duel10: '🛡️', clean: '✨' };
 
@@ -80,25 +83,26 @@ async function boot() {
     h('p', null, 'Bu ilova Telegram ichida ishlaydi. Botni oching va «Ilovani ochish» tugmasini bosing.')));
   try { S.me = await api('/me'); } catch (e) { return show(h('div', { class: 'load' }, e.message)); }
   const jc = (qs.get('join') || '').replace(/\W/g, '');
-  if (jc) {   // guruh havolasi/QR orqali kirgan o‘quvchi: sinf guruhdan olinadi
+  if (jc) {   // guruh havolasi/QR orqali kirgan o‘quvchi: darslik tanlash oynasi ko‘rsatilmaydi
     try { const r = await api('/join', { code: jc }); S.me = await api('/me'); setTimeout(() => toast('«' + r.name + '» guruhiga qo‘shildingiz'), 400); }
     catch (e) { setTimeout(() => toast(e.message), 400); }
   }
-  if (!S.me.user.grade) return onboarding();
+  if (!S.me.user.ready) return onboarding();
   const dc = (qs.get('duel') || '').replace(/\W/g, '');
   if (dc) { S.tab = 'duel'; return guard(duelView)(dc); }
   go('home');
 }
-function onboarding(change) {
-  let g = S.me.user.grade;
+async function onboarding(change) {
+  const T = await loadTopics();
+  let b = S.me.user.book;
   const draw = () => show(h('div', { class: 'hero' },
     h('img', { src: '/static/logo-white.png', style: 'height:44px;align-self:flex-start' }),
     h('h1', null, 'Tarixni ', h('span', { class: 'hl' }, 'o‘ynab'), ' o‘rganamiz!'),
-    h('p', { style: 'opacity:.9;font-weight:600' }, 'Nechanchi sinfda o‘qiysiz? Savollar shunga qarab tanlanadi.'),
-    h('div', { class: 'gradegrid' }, [6, 7, 8, 9, 10, 11].map(x =>
-      h('button', { class: g === x ? 'on' : '', onclick: () => { g = x; haptic(); draw(); } }, x, h('small', null, 'sinf')))),
+    h('p', { style: 'opacity:.9;font-weight:600' }, 'Qaysi darslikdan boshlaysiz? Keyin istalgan payt o‘zgartirishingiz mumkin. Guruhga qo‘shilsangiz, savollar guruhda o‘tilgan mavzulardan keladi.'),
+    h('div', { class: 'gradegrid', style: 'grid-template-columns:1fr 1fr' }, T.books.map(x =>
+      h('button', { class: b === x.id ? 'on' : '', style: 'font-size:15px;padding:13px 6px', onclick: () => { b = x.id; haptic(); draw(); } }, SUBJ[x.subj], h('small', null, x.grade + '-sinf darsligi')))),
     h('div', { style: 'flex:1;min-height:24px' }),
-    h('button', { class: 'btn y', disabled: !g, onclick: guard(async () => { await api('/me', { grade: g }); S.me = await api('/me'); go(change ? 'profile' : 'home'); }) }, 'Davom etish →')));
+    h('button', { class: 'btn y', disabled: !b, onclick: guard(async () => { await api('/me', { book: b }); S.me = await api('/me'); go(change ? 'profile' : 'home'); }) }, 'Davom etish →')));
   draw();
 }
 
@@ -111,7 +115,7 @@ async function home() {
   const hw = S.me.homework.filter(x => !x.done);
   show(h('div', null,
     h('div', { class: 'top' },
-      h('div', { class: 'brand' }, h('img', { src: '/static/logo-white.png' }), h('span', { class: 'pill' }, u.grade + '-sinf · Tarix')),
+      h('div', { class: 'brand' }, h('img', { src: '/static/logo-white.png' }), h('span', { class: 'pill' }, S.me.groups.length ? S.me.groups[0].name : 'Tarix')),
       h('h1', null, 'Salom, ' + u.name.split(' ')[0] + '!'),
       h('div', { class: 'lvl' }, h('div', { class: 'row' }, h('span', { class: 'f' }, L.idx + '-daraja · ' + L.name), h('span', null, L.next ? u.xp + ' / ' + L.next + ' ball' : u.xp + ' ball')),
         h('div', { class: 'bar' }, h('i', { style: 'width:' + pct + '%' }))),
@@ -148,28 +152,27 @@ function tile(em, t, s, fn, n) {
 async function loadTopics() { if (!S.topics) S.topics = await api('/topics'); return S.topics; }
 const setup = guard(async (mode, onPick) => {
   const T = await loadTopics();
-  const cov = mode === 'hw' ? [] : (S.me.covered || []);   // guruhda o‘tilgan mavzular oldindan belgilanadi
-  const st = { grade: S.me.user.grade, subj: null, sel: new Set(cov), count: mode === 'exam' ? 20 : mode === 'cards' ? 15 : mode === 'match' ? 5 : 15 };
-  if (!T.grades.includes(st.grade)) st.grade = T.grades[0];
+  const cov = new Set(mode === 'hw' ? [] : (S.me.covered || []));   // guruhda o‘tilgan mavzular
+  const st = { book: cov.size ? 'cov' : (S.me.user.book || T.books[0].id), sel: new Set(), count: mode === 'exam' ? 20 : mode === 'cards' ? 15 : mode === 'match' ? 5 : 15 };
+  if (st.book !== 'cov' && !T.books.some(b => b.id === st.book)) st.book = T.books[0].id;
   const title = { exam: 'Imtihon rejimi', match: 'Moslashtirish', cards: 'Savol-javob kartochkalari', hw: 'Vazifa uchun mavzular' }[mode];
   const key = { exam: 'tests', hw: 'tests', match: 'matches', cards: 'cards' }[mode];
   const counts = { exam: [10, 20, 30], hw: [10, 15, 20, 30], match: [3, 5, 10], cards: [10, 15, 30] }[mode];
   const draw = () => {
-    const list = T.topics.filter(t => t.grade === st.grade && (!st.subj || t.subj === st.subj) && t[key] > 0);
-    const subs = [...new Set(T.topics.filter(t => t.grade === st.grade).map(t => t.subj))];
+    const list = T.topics.filter(t => (st.book === 'cov' ? cov.has(t.id) : t.subj + t.grade === st.book) && t[key] > 0);
     const y = window.scrollY;
     show(h('div', null, header(title, mode === 'exam' ? 'Har savolga 40 soniya. Bitta urinish — natija oxirida.' : 'Mavzularni belgilang yoki barchasidan aralash oling', () => onPick ? onPick(null) : go('home')),
       h('div', { class: 'wrap' },
-        h('div', { class: 'chips' }, T.grades.map(g => h('button', { class: 'chip' + (g === st.grade ? ' on' : ''), onclick: () => { st.grade = g; st.subj = null; st.sel.clear(); draw(); } }, g + '-sinf'))),
-        subs.length > 1 ? h('div', { class: 'chips mt' }, [null, ...subs].map(s => h('button', { class: 'chip' + (s === st.subj ? ' on' : ''), onclick: () => { st.subj = s; st.sel.clear(); draw(); } }, s ? SUBJ[s] : 'Barchasi'))) : null,
+        h('div', { class: 'sec', style: 'margin-top:4px' }, 'Darslik'),
+        h('div', { class: 'chips' }, cov.size ? h('button', { class: 'chip' + (st.book === 'cov' ? ' on' : ''), onclick: () => { st.book = 'cov'; st.sel.clear(); draw(); } }, '✓ O‘tilgan mavzular') : null,
+          T.books.map(b => h('button', { class: 'chip' + (b.id === st.book ? ' on' : ''), onclick: () => { st.book = b.id; st.sel.clear(); draw(); } }, bookShort(b)))),
         h('div', { class: 'sec' }, 'Savollar soni'),
         h('div', { class: 'chips' }, counts.map(n => h('button', { class: 'chip' + (n === st.count ? ' on' : ''), onclick: () => { st.count = n; draw(); } }, n + ' ta'))),
-        h('div', { class: 'sec' }, 'Mavzular', h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, st.sel.size ? st.sel.size + ' ta tanlandi' : 'barchasi')),
-        cov.length && st.grade === S.me.user.grade ? h('div', { class: 'sm mute', style: 'margin:-4px 2px 10px' }, 'Darsda o‘tilgan mavzular belgilab qo‘yildi. Xohlasangiz o‘zgartiring.') : null,
+        h('div', { class: 'sec' }, 'Mavzular', h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, st.sel.size ? st.sel.size + ' ta tanlandi' : 'barchasidan aralash')),
         list.length ? h('div', { class: 'list' }, list.map(t => h('button', { class: 'li' + (st.sel.has(t.id) ? ' on' : ''), onclick: () => { st.sel.has(t.id) ? st.sel.delete(t.id) : st.sel.add(t.id); haptic(); draw(); } },
           h('div', { class: 'check' }, st.sel.has(t.id) ? '✓' : ''),
-          h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title), h('small', null, SUBJ[t.subj] + ' · ' + t[key] + ' ta')))))
-          : h('div', { class: 'card c mute' }, 'Bu sinf uchun savollar hali yuklanmagan')),
+          h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title), h('small', null, bookName(t) + ' · ' + t[key] + ' ta')))))
+          : h('div', { class: 'card c mute' }, 'Bu yerda savollar yo‘q')),
       h('div', { class: 'foot' }, h('button', { class: 'btn y', disabled: !list.length, onclick: () => {
         const topics = st.sel.size ? [...st.sel] : list.map(t => t.id);
         onPick ? onPick({ topics, count: st.count, names: list.filter(t => topics.includes(t.id)).map(t => t.title) }) : startSession({ mode, topics, count: st.count });
@@ -345,7 +348,7 @@ function result(r) {
 async function topView(period = 'week', scope = 'all') {
   const r = await api('/top?period=' + period + '&scope=' + scope);
   back(null);
-  const scopes = [['all', 'Hamma'], ['grade', S.me.user.grade + '-sinf'], ...S.me.groups.map(g => ['g' + g.id, g.name])];
+  const scopes = [['all', 'Hamma'], ...S.me.groups.map(g => ['g' + g.id, g.name])];
   show(h('div', null, h('div', { class: 'top' }, h('div', { class: 'brand' }, h('img', { src: '/static/logo-white.png' }), h('span', { class: 'pill' }, r.me.rank ? 'Siz: ' + r.me.rank + '-o‘rin' : 'Hali reytingda yo‘qsiz')),
     h('h1', null, 'Reyting'), h('div', { class: 'sub' }, 'Eng faol va bilimdon o‘quvchilar')),
     h('div', { class: 'wrap' },
@@ -354,7 +357,7 @@ async function topView(period = 'week', scope = 'all') {
       h('div', { class: 'mt' }),
       r.rows.length ? h('div', { class: 'list' }, r.rows.map(x => h('div', { class: 'li' + (x.me ? ' me' : '') },
         h('div', { class: 'n', style: x.rank <= 3 ? 'background:none;font-size:22px' : '' }, x.rank <= 3 ? '🥇🥈🥉'.slice((x.rank - 1) * 2, x.rank * 2) : x.rank),
-        h('div', { class: 't' }, h('b', null, x.name), h('small', null, (x.grade ? x.grade + '-sinf' : '') + (x.level ? ' · ' + x.level : ''))),
+        h('div', { class: 't' }, h('b', null, x.name), x.level ? h('small', null, x.level) : null),
         h('div', { class: 'v' }, x.pts))))
         : h('div', { class: 'card c mute' }, 'Bu davrda hali hech kim ball to‘plamagan. Birinchi bo‘ling!'))), true);
 }
@@ -413,7 +416,7 @@ async function profile() {
       h('div', { class: 'bdg' }, S.me.all_badges.map(b => h('div', { class: S.me.badges.includes(b.code) ? '' : 'off', title: b.desc }, h('i', null, BICON[b.code] || '🏅'), b.name))),
       h('div', { class: 'sec' }, 'Sozlamalar'),
       h('div', { class: 'list' },
-        h('button', { class: 'li', onclick: () => onboarding(true) }, h('div', { class: 'n' }, '🎓'), h('div', { class: 't' }, h('b', null, 'Sinf'), h('small', null, u.grade + '-sinf')), h('span', { class: 'mute' }, '›')),
+        h('button', { class: 'li', onclick: () => guard(onboarding)(true) }, h('div', { class: 'n' }, '📘'), h('div', { class: 't' }, h('b', null, 'Darslik'), h('small', null, S.me.groups.length ? 'Guruhda o‘tilgan mavzular bo‘yicha' : (u.book ? u.book.replace(/([a-z]+)(\d+)/, (m, sb, g) => SUBJ[sb] + ' · ' + g + '-sinf darsligi') : 'tanlanmagan'))), h('span', { class: 'mute' }, '›')),
         h('button', { class: 'li', onclick: join }, h('div', { class: 'n' }, '👥'), h('div', { class: 't' }, h('b', null, 'Guruhga qo‘shilish'), h('small', null, S.me.groups.length ? S.me.groups.map(g => g.name).join(', ') : 'O‘qituvchi kodi orqali')), h('span', { class: 'mute' }, '›')),
         h('button', { class: 'li', onclick: guard(async () => { await api('/me', { remind: !u.remind }); profile(); }) }, h('div', { class: 'n' }, '🔔'), h('div', { class: 't' }, h('b', null, 'Kunlik eslatma'), h('small', null, 'Har kuni kechqurun bot eslatadi')), h('span', { class: 'badge ' + (u.remind ? 'g' : 'm') }, u.remind ? 'yoqilgan' : 'o‘chiq'))),
       h('div', { class: 'mt2 c sm mute' }, 'ID: ' + u.id))), true);
@@ -423,10 +426,8 @@ async function profile() {
 async function teacherHome() {
   const gs = await api('/t/groups');
   const add = guard(async () => {
-    const n = prompt('Yangi guruh nomi (masalan: 8-A tarix):'); if (!n) return;
-    const g = parseInt(prompt('Guruh nechanchi sinf? (6–11)', (n.match(/\d+/) || [''])[0]), 10);
-    if (!(g >= 6 && g <= 11)) return toast('Sinf 6 dan 11 gacha bo‘lishi kerak');
-    await api('/t/group', { name: n, grade: g }); teacherHome();
+    const n = prompt('Yangi guruh nomi (masalan: Tarix 1-daraja, dush-chor 15:00):'); if (!n) return;
+    await api('/t/group', { name: n }); teacherHome();
   });
   show(h('div', null, header('O‘qituvchi paneli', 'Guruh yarating va kodini o‘quvchilarga bering', () => go('profile')),
     h('div', { class: 'wrap' },
@@ -444,19 +445,19 @@ async function groupView(gid) {
     const r = await api('/t/hw', { group_id: gid, title, topics: pick.topics, count: pick.count, deadline: dl });
     toast('Vazifa yuborildi: ' + r.count + ' ta savol'); groupView(gid);
   }));
-  show(h('div', null, header(g.name, (g.grade ? g.grade + '-sinf · ' : '') + 'kod: ' + g.code + ' · ' + g.members.length + ' o‘quvchi', () => teacherHome()),
+  show(h('div', null, header(g.name, 'kod: ' + g.code + ' · ' + g.members.length + ' o‘quvchi', () => teacherHome()),
     h('div', { class: 'wrap' },
       h('button', { class: 'btn y', onclick: newHw }, '+ Uyga vazifa berish'),
       h('div', { class: 'sec' }, 'O‘quvchilarni taklif qilish'),
       h('div', { class: 'card c' }, h('img', { src: g.qr, alt: 'QR', style: 'width:190px;height:190px' }),
-        h('div', { class: 'sm mute' }, 'O‘quvchi QR kodni skanerlaydi yoki havolani bosadi — guruhga o‘zi qo‘shiladi' + (g.grade ? ', sinfi ' + g.grade + '-sinf deb belgilanadi' : '')),
+        h('div', { class: 'sm mute' }, 'O‘quvchi QR kodni skanerlaydi yoki havolani bosadi — guruhga o‘zi qo‘shiladi'),
         h('div', { class: 'row mt', style: 'justify-content:center' },
           h('button', { class: 'btn sm', onclick: () => { const url = 'https://t.me/share/url?url=' + encodeURIComponent(g.link) + '&text=' + encodeURIComponent('«' + g.name + '» guruhiga qo‘shiling — Adab School tarix boti'); tg && tg.openTelegramLink ? tg.openTelegramLink(url) : window.open(url); } }, '📨 Havolani ulashish'),
           h('button', { class: 'btn sm w', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(g.link); toast('Havola nusxalandi'); } }, 'Nusxalash'))),
       h('div', { class: 'sec' }, 'O‘tilgan mavzular'),
       h('button', { class: 'cta', style: 'box-shadow:none;border:1.5px solid var(--line)', onclick: () => guard(progressView)(g) }, h('div', { class: 'ic', style: 'background:var(--blue)' }, '📍'),
-        h('div', null, h('b', null, g.progress.length ? 'Hozir shu mavzudamiz' : 'Belgilanmagan'),
-          h('small', null, g.progress.length ? g.progress.map(t => SUBJ[t.subj] + ': ' + t.num + '. ' + t.title).join(' · ') : 'Belgilasangiz, kunlik topshiriq faqat o‘tilgan mavzulardan tuziladi')), h('div', { class: 'go' }, '→')),
+        h('div', null, h('b', null, g.progress.length ? g.progress.length + ' ta mavzu o‘tilgan' : 'Belgilanmagan'),
+          h('small', null, g.progress.length ? 'Oxirgisi: ' + (t => bookShort(t) + ' — ' + t.num + '. ' + t.title)(g.progress[g.progress.length - 1]) : 'Belgilasangiz, o‘quvchilarga faqat o‘tilgan mavzulardan savol chiqadi')), h('div', { class: 'go' }, '→')),
       h('div', { class: 'sec' }, 'Vazifalar'),
       g.homework.length ? h('div', { class: 'list' }, g.homework.map(x => h('button', { class: 'li', onclick: guard(() => hwView(x.id, gid)) }, h('div', { class: 'n' }, '📚'),
         h('div', { class: 't' }, h('b', null, x.title), h('small', null, x.count + ' ta savol' + (x.deadline ? ' · muddat ' + x.deadline : ''))), h('div', { class: 'v' }, x.done + '/' + g.members.length))))
@@ -469,19 +470,21 @@ async function groupView(gid) {
 }
 async function progressView(g) {
   const T = await loadTopics();
-  const st = { grade: g.progress.length ? g.progress[0].grade : (T.grades.includes(S.me.user.grade) ? S.me.user.grade : T.grades[0]), last: {} };
-  g.progress.forEach(t => st.last[t.subj] = t.id);
+  const sel = new Set(g.progress.map(t => t.id));
+  let book = g.progress.length ? (t => t.subj + t.grade)(g.progress[g.progress.length - 1]) : T.books[0].id;
   const draw = () => {
     const y = window.scrollY;
-    const subs = [...new Set(T.topics.filter(t => t.grade === st.grade).map(t => t.subj))];
-    show(h('div', null, header('O‘tilgan mavzular', g.name + ' · har fan bo‘yicha oxirgi o‘tilgan mavzuni belgilang', () => guard(groupView)(g.id)),
+    const list = T.topics.filter(t => t.subj + t.grade === book);
+    const cnt = b => T.topics.filter(t => t.subj + t.grade === b.id && sel.has(t.id)).length;
+    show(h('div', null, header('O‘tilgan mavzular', g.name + ' · jami ' + sel.size + ' ta mavzu belgilangan', () => guard(groupView)(g.id)),
       h('div', { class: 'wrap' },
-        h('div', { class: 'chips' }, T.grades.map(x => h('button', { class: 'chip' + (x === st.grade ? ' on' : ''), onclick: () => { st.grade = x; st.last = {}; draw(); } }, x + '-sinf'))),
-        subs.map(sb => { const list = T.topics.filter(t => t.grade === st.grade && t.subj === sb); const li = list.findIndex(t => t.id === st.last[sb]);
-          return [h('div', { class: 'sec' }, SUBJ[sb], h('span', { class: 'mute sm', style: 'margin-left:auto;font-family:Nunito' }, li >= 0 ? (li + 1) + ' ta mavzu o‘tilgan' : 'belgilanmagan')),
-            h('div', { class: 'list' }, list.map((t, k) => h('button', { class: 'li' + (k <= li ? ' on' : ''), onclick: () => { st.last[sb] === t.id ? delete st.last[sb] : st.last[sb] = t.id; haptic(); draw(); } },
-              h('div', { class: 'check' }, k <= li ? '✓' : ''), h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title)), k === li ? h('span', { class: 'badge b' }, 'shu yerdamiz') : null)))]; })),
-      h('div', { class: 'foot' }, h('button', { class: 'btn y', onclick: guard(async () => { await api('/t/progress', { group_id: g.id, topics: Object.values(st.last) }); toast('Saqlandi'); groupView(g.id); }) }, 'Saqlash'))));
+        h('div', { class: 'sm mute', style: 'margin-bottom:10px' }, 'Istalgan darslikdan o‘tilgan mavzularni belgilang. Mavzuni bossangiz, undan oldingilari ham belgilanadi; belgini olib tashlash uchun yana bosing.'),
+        h('div', { class: 'chips' }, T.books.map(b => h('button', { class: 'chip' + (b.id === book ? ' on' : ''), onclick: () => { book = b.id; draw(); } }, bookShort(b) + (cnt(b) ? ' · ' + cnt(b) : '')))),
+        h('div', { class: 'list mt' }, list.map((t, k) => h('button', { class: 'li' + (sel.has(t.id) ? ' on' : ''), onclick: () => {
+          if (sel.has(t.id)) sel.delete(t.id); else list.slice(0, k + 1).forEach(x => sel.add(x.id));
+          haptic(); draw();
+        } }, h('div', { class: 'check' }, sel.has(t.id) ? '✓' : ''), h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title)))))),
+      h('div', { class: 'foot' }, h('button', { class: 'btn y', onclick: guard(async () => { await api('/t/progress', { group_id: g.id, topics: [...sel] }); S.me = await api('/me'); toast('Saqlandi'); groupView(g.id); }) }, 'Saqlash'))));
     window.scrollTo(0, y);
   };
   draw();
@@ -534,16 +537,16 @@ async function adminReports() {
         h('button', { class: 'btn sm w', onclick: guard(async () => { await api('/a/report/' + r.id, {}); adminReports(); }) }, 'Yopish'))))
       : h('div', { class: 'card c mute' }, 'Yangi xabarlar yo‘q 🎉'))));
 }
-async function adminTopics(grade) {
-  const T = await loadTopics(); grade = grade || T.grades[0];
+async function adminTopics(book) {
+  const T = await loadTopics(); book = typeof book === 'string' ? book : T.books[0].id;
   show(h('div', null, header('Savollar', 'Mavzuni tanlang', () => guard(adminHome)()),
-    h('div', { class: 'wrap' }, h('div', { class: 'chips' }, T.grades.map(g => h('button', { class: 'chip' + (g === grade ? ' on' : ''), onclick: () => adminTopics(g) }, g + '-sinf'))),
-      h('div', { class: 'list mt' }, T.topics.filter(t => t.grade === grade).map(t => h('button', { class: 'li', onclick: guard(() => adminQuestions(t, 'test')) },
-        h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title), h('small', null, SUBJ[t.subj] + ' · ' + t.tests + ' test · ' + t.matches + ' moslashtirish · ' + t.cards + ' savol')), h('span', { class: 'mute' }, '›')))))));
+    h('div', { class: 'wrap' }, h('div', { class: 'chips' }, T.books.map(b => h('button', { class: 'chip' + (b.id === book ? ' on' : ''), onclick: () => adminTopics(b.id) }, bookShort(b)))),
+      h('div', { class: 'list mt' }, T.topics.filter(t => t.subj + t.grade === book).map(t => h('button', { class: 'li', onclick: guard(() => adminQuestions(t, 'test')) },
+        h('div', { class: 't' }, h('b', null, t.num + '. ' + t.title), h('small', null, t.tests + ' test · ' + t.matches + ' moslashtirish · ' + t.cards + ' savol')), h('span', { class: 'mute' }, '›')))))));
 }
 async function adminQuestions(t, kind) {
   const qsn = await api('/a/questions?topic=' + t.id + '&kind=' + kind);
-  show(h('div', null, header(t.title, t.grade + '-sinf · ' + SUBJ[t.subj], () => adminTopics(t.grade)),
+  show(h('div', null, header(t.title, bookName(t), () => adminTopics(t.subj + t.grade)),
     h('div', { class: 'wrap' }, h('div', { class: 'tabs' }, [['test', 'Testlar'], ['match', 'Moslashtirish'], ['card', 'Savol-javob']].map(([k, n]) => h('button', { class: k === kind ? 'on' : '', onclick: guard(() => adminQuestions(t, k)) }, n))),
       h('div', { class: 'list mt' }, qsn.map(q => h('button', { class: 'li', style: q.active ? '' : 'opacity:.45', onclick: () => qEditor(q, guard(() => adminQuestions(t, kind))) },
         h('div', { class: 'n' }, q.n), h('div', { class: 't' }, h('b', null, q.data.q || q.data.t), h('small', null, kind === 'test' ? '✓ ' + q.data.o[q.data.a] : kind === 'card' ? q.data.a : q.data.l.length + ' juftlik')), q.data.img ? h('span', null, '🖼') : null))))));
@@ -552,7 +555,7 @@ function adminUsers(q) {
   let box;
   const load = guard(async () => {
     const us = await api('/a/users?q=' + encodeURIComponent(q || ''));
-    box.replaceChildren(...us.map(u => h('div', { class: 'li' }, h('div', { class: 't' }, h('b', null, u.name + (u.username ? ' · @' + u.username : '')), h('small', null, (u.grade ? u.grade + '-sinf · ' : '') + u.xp + ' ball' + (u.phone ? ' · ' + u.phone : ''))),
+    box.replaceChildren(...us.map(u => h('div', { class: 'li' }, h('div', { class: 't' }, h('b', null, u.name + (u.username ? ' · @' + u.username : '')), h('small', null, u.xp + ' ball' + (u.phone ? ' · ' + u.phone : ''))),
       h('select', { class: 'field', style: 'width:auto;padding:6px 8px', onchange: guard(async e => { await api('/a/user/' + u.id, { role: e.target.value }); toast('Rol o‘zgartirildi'); }) },
         [['user', 'Mehmon'], ['student', 'O‘quvchi'], ['teacher', 'O‘qituvchi'], ['admin', 'Admin']].map(([k, n]) => h('option', { value: k, selected: k === u.role }, n))))));
     if (!us.length) box.replaceChildren(h('div', { class: 'li mute' }, 'Topilmadi'));

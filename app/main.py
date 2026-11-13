@@ -166,37 +166,40 @@ def pick(c, kind, topic_ids, n, exclude=()):
     return random.sample(ids, min(n, len(ids)))
 
 
-def grade_topics(c, grade, subj=None):
-    q = sa.select(topics.c.id)
-    if grade:
-        q = q.where(topics.c.grade == grade)
-    if subj:
-        q = q.where(topics.c.subj == subj)
+def book_topics(c, book=None):
+    """Darslik (masalan 'jahon7' = 7-sinf Jahon tarixi) mavzulari; ko'rsatilmasa — barcha mavzular."""
+    m = re.fullmatch(r"([a-z]+)(\d+)", book or "")
+    q = sa.select(topics.c.id).order_by(topics.c.ord)
+    if m:
+        q = q.where(topics.c.subj == m.group(1), topics.c.grade == int(m.group(2)))
     ids = [r[0] for r in c.execute(q)]
-    return ids or [r[0] for r in c.execute(sa.select(topics.c.id))]
+    return ids or [r[0] for r in c.execute(sa.select(topics.c.id).order_by(topics.c.ord))]
 
 
-def covered_topics(c, last_ids):
-    """Har fan bo'yicha 'oxirgi o'tilgan mavzu'gacha bo'lgan barcha mavzular va eng so'nggilari."""
-    covered, recent = [], []
-    for t in c.execute(sa.select(topics).where(topics.c.id.in_(last_ids or ["-"]))).mappings():
-        rows = c.execute(sa.select(topics.c.id).where(topics.c.grade == t["grade"], topics.c.subj == t["subj"],
-                                                      topics.c.ord <= t["ord"]).order_by(topics.c.ord)).all()
-        ids = [r[0] for r in rows]
-        covered += ids
-        recent += ids[-2:]
-    return covered, recent
+def covered_topics(c, ids):
+    """Guruhda o'tilgan mavzular (tartib bo'yicha) va har darslikdagi eng so'nggi ikkitasi."""
+    rows = c.execute(sa.select(topics.c.id, topics.c.grade, topics.c.subj).where(topics.c.id.in_(ids or ["-"]))
+                     .order_by(topics.c.ord)).all()
+    by_book = {}
+    for tid, g, sb in rows:
+        by_book.setdefault((g, sb), []).append(tid)
+    return [r[0] for r in rows], [t for v in by_book.values() for t in v[-2:]]
 
 
 def daily_scope(c, u):
-    """Kunlik topshiriq kimlar uchun umumiy: o'tilgan mavzulari belgilangan guruh yoki butun sinf."""
+    """Kunlik topshiriq kimlar uchun umumiy: o'tilgan mavzulari belgilangan guruh yoki tanlangan darslik."""
     for gid, in c.execute(sa.select(members.c.group_id).where(members.c.user_id == u["id"]).order_by(members.c.group_id)):
         pr = c.execute(sa.select(progress.c.topic_ids).where(progress.c.group_id == gid)).scalar()
         if pr:
             covered, recent = covered_topics(c, pr)
             if covered:
                 return f"g{gid}", covered, recent
-    return f"s{u['grade'] or 0}", grade_topics(c, u["grade"]), []
+    return f"b{u.get('book') or 'all'}", book_topics(c, u.get("book")), []
+
+
+def pool(c, u):
+    """O'quvchi uchun savollar olinadigan mavzular: guruhida o'tilganlar yoki o'zi tanlagan darslik."""
+    return daily_scope(c, u)[1]
 
 
 def daily_qids(c, u):
@@ -294,12 +297,14 @@ def me(u=Depends(auth)):
         ok = c.execute(sa.select(sa.func.count()).select_from(answers)
                        .where(answers.c.user_id == uid, answers.c.ok == sa.true())).scalar()
         tot = c.execute(sa.select(sa.func.count()).select_from(answers).where(answers.c.user_id == uid)).scalar()
-        return {"user": {"id": uid, "name": u["name"], "grade": u["grade"], "role": u["role"], "xp": u["xp"],
+        scope, covered, _ = daily_scope(c, u)
+        return {"user": {"id": uid, "name": u["name"], "book": u["book"], "role": u["role"], "xp": u["xp"],
+                         "ready": bool(u["book"] or gs),
                          "streak": streak, "best_streak": u["best_streak"], "phone": bool(u["phone"]),
                          "remind": u["remind"]},
                 "level": level(u["xp"]), "levels": [{"need": n, "name": nm} for n, nm in LEVELS], "free": free,
                 "daily_done": bool(d and d[0]), "mistakes_due": due, "mistakes_all": allm, "homework": hw,
-                "groups": gs, "covered": daily_scope(c, u)[1] if gs else [], "badges": bs, "stats": {"ok": ok, "total": tot}, "bot": BOT_NAME["v"],
+                "groups": gs, "covered": covered if scope.startswith("g") else [], "badges": bs, "stats": {"ok": ok, "total": tot}, "bot": BOT_NAME["v"],
                 "all_badges": [{"code": k, "name": v[0], "desc": v[1]} for k, v in BADGES.items()]}
 
 
@@ -307,8 +312,11 @@ def me(u=Depends(auth)):
 async def me_update(req: Request, u=Depends(auth)):
     b = await req.json()
     vals = {}
-    if b.get("grade") in (5, 6, 7, 8, 9, 10, 11):
-        vals["grade"] = b["grade"]
+    m = re.fullmatch(r"([a-z]+)(\d+)", str(b.get("book") or ""))
+    if m:
+        with engine.begin() as c:
+            if c.execute(sa.select(topics.c.id).where(topics.c.subj == m.group(1), topics.c.grade == int(m.group(2))).limit(1)).first():
+                vals["book"] = m.group(0)
     if isinstance(b.get("name"), str) and 2 <= len(b["name"].strip()) <= 60:
         vals["name"] = b["name"].strip()
     if isinstance(b.get("remind"), bool):
@@ -330,7 +338,12 @@ def topic_list(grade: int = 0, u=Depends(auth)):
         if grade:
             q = q.where(topics.c.grade == grade)
         grades = sorted({r[0] for r in c.execute(sa.select(topics.c.grade).distinct())})
-        return {"grades": grades,
+        books, seen = [], set()
+        for t in c.execute(sa.select(topics.c.subj, topics.c.grade).order_by(topics.c.ord)):
+            if (t[0], t[1]) not in seen:
+                seen.add((t[0], t[1]))
+                books.append({"id": f"{t[0]}{t[1]}", "subj": t[0], "grade": t[1]})
+        return {"grades": grades, "books": books,
                 "topics": [{"id": t["id"], "subj": t["subj"], "grade": t["grade"], "num": t["num"], "title": t["title"],
                             "tests": cnt.get(t["id"], {}).get("test", 0), "matches": cnt.get(t["id"], {}).get("match", 0),
                             "cards": cnt.get(t["id"], {}).get("card", 0)} for t in c.execute(q).mappings()]}
@@ -380,7 +393,7 @@ async def start(req: Request, u=Depends(auth)):
                                          "yoki Adab School o'quvchisi sifatida telefon raqamingizni tasdiqlang.")
         tids = [t for t in (b.get("topics") or []) if isinstance(t, str)][:80]
         if not tids:
-            tids = grade_topics(c, b.get("grade") or u["grade"], b.get("subj"))
+            tids = pool(c, u)
         count = min(max(int(b.get("count") or 10), 1), 50, remaining)
         limit_sec, ref, qids = None, None, []
         if mode == "exam":
@@ -589,9 +602,7 @@ def top(period: str = "week", scope: str = "all", u=Depends(auth)):
             q = sa.select(users.c.id, users.c.name, users.c.grade, sa.func.sum(xp_log.c.pts).label("pts")) \
                 .join(xp_log, xp_log.c.user_id == users.c.id).where(xp_log.c.day >= start.strftime("%Y-%m-%d")) \
                 .group_by(users.c.id, users.c.name, users.c.grade)
-        if scope == "grade" and u["grade"]:
-            q = q.where(users.c.grade == u["grade"])
-        elif scope.startswith("g"):
+        if scope.startswith("g"):
             ids = [r[0] for r in c.execute(sa.select(members.c.user_id).where(members.c.group_id == int(scope[1:] or 0)))]
             q = q.where(users.c.id.in_(ids or [0]))
         rows = sorted([dict(r) for r in c.execute(q).mappings()], key=lambda r: -int(r["pts"]))
@@ -639,11 +650,11 @@ async def duel_create(req: Request, u=Depends(auth)):
             if d:
                 c.execute(duels.update().where(duels.c.id == d["id"]).values(p2=u["id"], open=False))
                 return duel_view(c, d["code"], u["id"])
-        qids = pick(c, "test", grade_topics(c, u["grade"]), 10)
+        qids = pick(c, "test", pool(c, u), 10)
         if len(qids) < 5:
             raise HTTPException(404, "Savollar yetarli emas")
         code = secrets.token_hex(4)
-        c.execute(duels.insert().values(code=code, grade=u["grade"], p1=u["id"], qids=qids, open=rnd, status="wait",
+        c.execute(duels.insert().values(code=code, p1=u["id"], qids=qids, open=rnd, status="wait",
                                         created=now()))
         return duel_view(c, code, u["id"])
 
@@ -680,9 +691,7 @@ async def join_group(req: Request, u=Depends(auth)):
             raise HTTPException(404, "Bunday kodli guruh topilmadi")
         if not c.execute(sa.select(members).where(members.c.group_id == g["id"], members.c.user_id == u["id"])).first():
             c.execute(members.insert().values(group_id=g["id"], user_id=u["id"]))
-        if g["grade"]:   # guruhga qo'shilgan o'quvchining sinfi guruh sinfiga tenglashadi
-            c.execute(users.update().where(users.c.id == u["id"]).values(grade=g["grade"]))
-        return {"ok": True, "name": g["name"], "grade": g["grade"]}
+        return {"ok": True, "name": g["name"]}
 
 
 def own_group(c, gid, u):
@@ -712,10 +721,9 @@ async def t_group_create(req: Request, u=Depends(teacher)):
     name = str(b.get("name", "")).strip()[:80]
     if len(name) < 2:
         raise HTTPException(400, "Guruh nomini kiriting")
-    grade = b.get("grade") if b.get("grade") in (5, 6, 7, 8, 9, 10, 11) else None
     with engine.begin() as c:
         code = "".join(random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
-        c.execute(groups.insert().values(name=name, teacher_id=u["id"], code=code, grade=grade))
+        c.execute(groups.insert().values(name=name, teacher_id=u["id"], code=code))
     return {"ok": True, "code": code}
 
 
@@ -760,25 +768,21 @@ def t_group(gid: int, u=Depends(teacher)):
                 for t in c.execute(sa.select(topics).where(topics.c.id.in_(pr or ["-"])).order_by(topics.c.ord)).mappings()]
         link = f"https://t.me/{BOT_NAME['v']}?start=g_{g['code']}"
         qr = segno.make(link, error="m").svg_data_uri(scale=8, border=2, dark="#001342")
-        return {"id": gid, "name": g["name"], "code": g["code"], "grade": g["grade"], "members": ms, "homework": hws,
+        return {"id": gid, "name": g["name"], "code": g["code"], "members": ms, "homework": hws,
                 "hard": hard, "progress": prog, "link": link, "qr": qr}
 
 
 @app.post("/api/t/progress")
 async def t_progress(req: Request, u=Depends(teacher)):
-    """Guruh darsda qaysi mavzugacha yetib kelgani: har fan bo'yicha oxirgi o'tilgan mavzu."""
+    """Guruhda o'tilgan mavzular ro'yxati (istalgan darsliklardan)."""
     b = await req.json()
     with engine.begin() as c:
         g = own_group(c, int(b.get("group_id") or 0), u)
-        ids = [t for t in (b.get("topics") or []) if isinstance(t, str)][:10]
-        last = {}
-        for t in c.execute(sa.select(topics).where(topics.c.id.in_(ids or ["-"]))).mappings():
-            last[(t["grade"], t["subj"])] = t["id"]
+        ids = [t for t in (b.get("topics") or []) if isinstance(t, str)][:400]
+        last = [r[0] for r in c.execute(sa.select(topics.c.id).where(topics.c.id.in_(ids or ["-"])).order_by(topics.c.ord))]
         c.execute(progress.delete().where(progress.c.group_id == g["id"]))
         if last:
-            c.execute(progress.insert().values(group_id=g["id"], topic_ids=list(last.values())))
-            if not g["grade"]:   # sinfi ko'rsatilmagan (eski) guruh: sinf belgilangan mavzudan olinadi
-                c.execute(groups.update().where(groups.c.id == g["id"]).values(grade=next(iter(last))[0]))
+            c.execute(progress.insert().values(group_id=g["id"], topic_ids=last))
         # bugungi umumiy to'plam yangi mavzular bo'yicha qayta tuziladi (hali hech kim boshlamagan bo'lsa)
         c.execute(daily_sets.delete().where(daily_sets.c.k == f"g{g['id']}:{today()}"))
     return {"ok": True, "count": len(last)}
@@ -897,7 +901,7 @@ def a_users(q: str = "", u=Depends(admin)):
             like = f"%{q.lower()}%"
             s = s.where(sa.or_(sa.func.lower(users.c.name).like(like), sa.func.lower(users.c.username).like(like),
                                users.c.phone.like(f"%{re.sub(chr(92) + 'D', '', q) or '~'}%")))
-        return [{"id": r["id"], "name": r["name"], "username": r["username"], "role": r["role"], "grade": r["grade"],
+        return [{"id": r["id"], "name": r["name"], "username": r["username"], "role": r["role"],
                  "xp": r["xp"], "phone": r["phone"]} for r in c.execute(s).mappings()]
 
 
@@ -1035,7 +1039,7 @@ def send_reminders():
         c.execute(kv.delete().where(kv.c.k == "remind"))
         c.execute(kv.insert().values(k="remind", v=today()))
         rows = c.execute(sa.select(users.c.id, users.c.streak, users.c.last_daily).where(
-            users.c.remind == sa.true(), users.c.grade.isnot(None),
+            users.c.remind == sa.true(),
             sa.or_(users.c.last_daily.is_(None), users.c.last_daily != today()))).all()
     n = 0
     for uid, streak, last in rows:

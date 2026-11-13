@@ -18,7 +18,7 @@ def T(name, *cols):
 users = T("users",
           sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
           sa.Column("name", sa.String(120)), sa.Column("username", sa.String(64)),
-          sa.Column("phone", sa.String(20)), sa.Column("grade", sa.Integer),
+          sa.Column("phone", sa.String(20)), sa.Column("grade", sa.Integer), sa.Column("book", sa.String(12)),
           sa.Column("role", sa.String(12), default="user"),  # user | student | teacher | admin
           sa.Column("xp", sa.Integer, default=0), sa.Column("streak", sa.Integer, default=0),
           sa.Column("best_streak", sa.Integer, default=0), sa.Column("last_daily", sa.String(10)),
@@ -82,6 +82,9 @@ def migrate():
     if "grade" not in {c["name"] for c in insp.get_columns("groups")}:
         with engine.begin() as c:
             c.execute(sa.text("ALTER TABLE groups ADD COLUMN grade INTEGER"))
+    if "book" not in {c["name"] for c in insp.get_columns("users")}:
+        with engine.begin() as c:
+            c.execute(sa.text("ALTER TABLE users ADD COLUMN book VARCHAR(12)"))
 
 
 def init(content_path):
