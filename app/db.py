@@ -1,12 +1,33 @@
 """Ma'lumotlar bazasi: SQLite (lokal) yoki PostgreSQL (DATABASE_URL orqali)."""
 import json
 import os
+import time
 import sqlalchemy as sa
 
 URL = os.environ.get("DATABASE_URL", "sqlite:///data.db")
 if URL.startswith("postgres://"):
     URL = URL.replace("postgres://", "postgresql://", 1)
-engine = sa.create_engine(URL, pool_pre_ping=True, future=True)
+_kw = {} if URL.startswith("sqlite") else {"pool_size": 10, "max_overflow": 10, "pool_recycle": 900}
+engine = sa.create_engine(URL, future=True, **_kw)
+RO = engine.execution_options(isolation_level="AUTOCOMMIT")   # o'qish uchun: COMMIT so'rovisiz
+
+
+@sa.event.listens_for(engine, "checkout")
+def _ping(dbapi_con, rec, proxy):
+    """Ulanish 20 soniyadan ko'p bo'sh turgan bo'lsagina tirikligini tekshiramiz (har safar emas)."""
+    if time.time() - rec.info.get("t", 0) > 20:
+        try:
+            cur = dbapi_con.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+        except Exception:
+            raise sa.exc.DisconnectionError()
+    rec.info["t"] = time.time()
+
+
+@sa.event.listens_for(engine, "checkin")
+def _seen(dbapi_con, rec):
+    rec.info["t"] = time.time()
 md = sa.MetaData()
 BigInt = sa.BigInteger().with_variant(sa.Integer, "sqlite")
 

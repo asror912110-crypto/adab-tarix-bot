@@ -8,6 +8,7 @@ import random
 import re
 import secrets
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib.parse
 
@@ -19,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
+from .db import RO
 from .db import (answers, badges, daily_sets, duels, engine, groups, homework, kv, members, mistakes, progress,
                  questions, reports, sessions, topics, users, whitelist, xp_log)
 
@@ -54,6 +56,33 @@ EXAM_SEC, DUEL_SEC = 40, 30            # imtihon va bellashuvda bir savolga beri
 PER_Q = {"test": 40, "match": 90}      # kunlik topshiriqda har bir savol uchun taymer
 
 app = FastAPI(title="Adab School Tarix")
+POOL = ThreadPoolExecutor(8)
+# Savollar bazasi o'zgarmas, shuning uchun xotirada saqlanadi (har so'rovda bazaga murojaat qilinmaydi)
+TOP, QS, BYKT = [], {}, {}
+
+
+def load_content():
+    with RO.connect() as c:
+        TOP[:] = [dict(r) for r in c.execute(sa.select(topics).order_by(topics.c.ord)).mappings()]
+        QS.clear()
+        for r in c.execute(sa.select(questions)).mappings():
+            QS[r["id"]] = dict(r)
+    reindex()
+
+
+def reindex():
+    BYKT.clear()
+    for q in QS.values():
+        if q["active"]:
+            BYKT.setdefault((q["kind"], q["topic_id"]), []).append(q["id"])
+
+
+def par(*fns):
+    """Bir nechta mustaqil o'qish so'rovini parallel bajarish."""
+    def run(fn):
+        with RO.connect() as c:
+            return fn(c)
+    return [f.result() for f in [POOL.submit(run, fn) for fn in fns]]
 
 
 def now():
@@ -113,7 +142,7 @@ def auth(x_init_data: str = Header(default="")):
         tg = check_init_data(x_init_data)
     if not tg:
         raise HTTPException(401, "Telegram orqali kiring")
-    with engine.begin() as c:
+    with RO.connect() as c:
         return ensure_user(c, tg)
 
 
@@ -160,40 +189,40 @@ def pub(q, with_answer=False):
 def pick(c, kind, topic_ids, n, exclude=()):
     if not topic_ids or n <= 0:
         return []
-    ids = [r[0] for r in c.execute(sa.select(questions.c.id).where(
-        questions.c.kind == kind, questions.c.active == sa.true(), questions.c.topic_id.in_(topic_ids)))]
-    ids = [i for i in ids if i not in set(exclude)]
+    ex = set(exclude)
+    ids = [i for t in dict.fromkeys(topic_ids) for i in BYKT.get((kind, t), ()) if i not in ex]
     return random.sample(ids, min(n, len(ids)))
 
 
 def book_topics(c, book=None):
     """Darslik (masalan 'jahon7' = 7-sinf Jahon tarixi) mavzulari; ko'rsatilmasa — barcha mavzular."""
     m = re.fullmatch(r"([a-z]+)(\d+)", book or "")
-    q = sa.select(topics.c.id).order_by(topics.c.ord)
-    if m:
-        q = q.where(topics.c.subj == m.group(1), topics.c.grade == int(m.group(2)))
-    ids = [r[0] for r in c.execute(q)]
-    return ids or [r[0] for r in c.execute(sa.select(topics.c.id).order_by(topics.c.ord))]
+    ids = [t["id"] for t in TOP if m and t["subj"] == m.group(1) and t["grade"] == int(m.group(2))]
+    return ids or [t["id"] for t in TOP]
 
 
 def covered_topics(c, ids):
     """Guruhda o'tilgan mavzular (tartib bo'yicha) va har darslikdagi eng so'nggi ikkitasi."""
-    rows = c.execute(sa.select(topics.c.id, topics.c.grade, topics.c.subj).where(topics.c.id.in_(ids or ["-"]))
-                     .order_by(topics.c.ord)).all()
+    want = set(ids or ())
+    rows = [t for t in TOP if t["id"] in want]
     by_book = {}
-    for tid, g, sb in rows:
-        by_book.setdefault((g, sb), []).append(tid)
-    return [r[0] for r in rows], [t for v in by_book.values() for t in v[-2:]]
+    for t in rows:
+        by_book.setdefault((t["grade"], t["subj"]), []).append(t["id"])
+    return [t["id"] for t in rows], [t for v in by_book.values() for t in v[-2:]]
 
 
-def daily_scope(c, u):
+def daily_scope(c, u, gids=None):
     """Kunlik topshiriq kimlar uchun umumiy: o'tilgan mavzulari belgilangan guruh yoki tanlangan darslik."""
-    for gid, in c.execute(sa.select(members.c.group_id).where(members.c.user_id == u["id"]).order_by(members.c.group_id)):
-        pr = c.execute(sa.select(progress.c.topic_ids).where(progress.c.group_id == gid)).scalar()
-        if pr:
-            covered, recent = covered_topics(c, pr)
-            if covered:
-                return f"g{gid}", covered, recent
+    if gids is None:
+        gids = [r[0] for r in c.execute(sa.select(members.c.group_id).where(members.c.user_id == u["id"]))]
+    if gids:
+        pr = {r[0]: r[1] for r in c.execute(sa.select(progress.c.group_id, progress.c.topic_ids)
+                                            .where(progress.c.group_id.in_(gids)))}
+        for gid in sorted(gids):
+            if pr.get(gid):
+                covered, recent = covered_topics(c, pr[gid])
+                if covered:
+                    return f"g{gid}", covered, recent
     return f"b{u.get('book') or 'all'}", book_topics(c, u.get("book")), []
 
 
@@ -230,8 +259,7 @@ def daily_qids(c, u):
 
 
 def load_qs(c, qids):
-    rows = {r["id"]: dict(r) for r in c.execute(sa.select(questions).where(questions.c.id.in_(qids))).mappings()}
-    return [rows[i] for i in qids if i in rows]
+    return [QS[i] for i in qids if i in QS]
 
 
 def award(c, uid, code):
@@ -269,43 +297,57 @@ def check_badges(c, uid, sess=None):
 # ------------------------------------------------------------------ profile
 @app.get("/api/me")
 def me(u=Depends(auth)):
-    with engine.begin() as c:
-        uid = u["id"]
-        free = None
-        if u["role"] == "user":
-            free = {"limit": FREE_LIMIT, "used": used_today(c, uid)}
-        due = c.execute(sa.select(sa.func.count()).select_from(mistakes)
-                        .where(mistakes.c.user_id == uid, mistakes.c.due <= today())).scalar()
-        allm = c.execute(sa.select(sa.func.count()).select_from(mistakes).where(mistakes.c.user_id == uid)).scalar()
-        d = c.execute(sa.select(sessions.c.finished).where(sessions.c.user_id == uid, sessions.c.mode == "daily",
-                                                           sessions.c.day == today())).first()
+    uid = u["id"]
+    cnt = lambda t, *w: sa.select(sa.func.count()).select_from(t).where(*w).scalar_subquery()
+
+    def counts(c):
+        return c.execute(sa.select(
+            cnt(mistakes, mistakes.c.user_id == uid, mistakes.c.due <= today()),
+            cnt(mistakes, mistakes.c.user_id == uid),
+            cnt(answers, answers.c.user_id == uid, answers.c.ok == sa.true()),
+            cnt(answers, answers.c.user_id == uid),
+            cnt(answers, answers.c.user_id == uid, answers.c.day == today()))).first()
+
+    def week(c):
+        return {r[0] for r in c.execute(sa.select(sessions.c.day).where(
+            sessions.c.user_id == uid, sessions.c.mode == "daily", sessions.c.finished.isnot(None),
+            sessions.c.day >= today(-6)))}
+
+    def group_part(c):
         gs = [dict(r) for r in c.execute(sa.select(groups.c.id, groups.c.name).join(
-            members, members.c.group_id == groups.c.id).where(members.c.user_id == uid)).mappings()]
+            members, members.c.group_id == groups.c.id).where(members.c.user_id == uid).order_by(groups.c.id)).mappings()]
         hw = []
         if gs:
             names = {g["id"]: g["name"] for g in gs}
-            for h in c.execute(sa.select(homework).where(homework.c.group_id.in_(list(names)))
-                               .order_by(homework.c.id.desc()).limit(20)).mappings():
-                s = c.execute(sa.select(sessions.c.score, sessions.c.total).where(
-                    sessions.c.user_id == uid, sessions.c.mode == "hw", sessions.c.ref == str(h["id"]),
-                    sessions.c.finished.isnot(None))).first()
+            hws = c.execute(sa.select(homework).where(homework.c.group_id.in_(list(names)))
+                            .order_by(homework.c.id.desc()).limit(20)).mappings().all()
+            done = {}
+            if hws:
+                done = {r[0]: r[1] for r in c.execute(sa.select(sessions.c.ref, sessions.c.score).where(
+                    sessions.c.user_id == uid, sessions.c.mode == "hw", sessions.c.finished.isnot(None),
+                    sessions.c.ref.in_([str(h["id"]) for h in hws])))}
+            for h in hws:
+                k = str(h["id"])
                 hw.append({"id": h["id"], "title": h["title"], "deadline": h["deadline"], "group": names[h["group_id"]],
-                           "count": len(h["qids"]), "done": bool(s), "score": s[0] if s else None,
+                           "count": len(h["qids"]), "done": k in done, "score": done.get(k),
                            "late": bool(h["deadline"] and h["deadline"] < today())})
-        bs = [r[0] for r in c.execute(sa.select(badges.c.code).where(badges.c.user_id == uid))]
-        streak = u["streak"] if u["last_daily"] in (today(), today(-1)) else 0
-        ok = c.execute(sa.select(sa.func.count()).select_from(answers)
-                       .where(answers.c.user_id == uid, answers.c.ok == sa.true())).scalar()
-        tot = c.execute(sa.select(sa.func.count()).select_from(answers).where(answers.c.user_id == uid)).scalar()
-        scope, covered, _ = daily_scope(c, u)
-        return {"user": {"id": uid, "name": u["name"], "book": u["book"], "role": u["role"], "xp": u["xp"],
-                         "ready": bool(u["book"] or gs),
-                         "streak": streak, "best_streak": u["best_streak"], "phone": bool(u["phone"]),
-                         "remind": u["remind"]},
-                "level": level(u["xp"]), "levels": [{"need": n, "name": nm} for n, nm in LEVELS], "free": free,
-                "daily_done": bool(d and d[0]), "mistakes_due": due, "mistakes_all": allm, "homework": hw,
-                "groups": gs, "covered": covered if scope.startswith("g") else [], "badges": bs, "stats": {"ok": ok, "total": tot}, "bot": BOT_NAME["v"],
-                "all_badges": [{"code": k, "name": v[0], "desc": v[1]} for k, v in BADGES.items()]}
+        scope, covered, _ = daily_scope(c, u, [g["id"] for g in gs])
+        return gs, hw, covered if scope.startswith("g") else []
+
+    def badge_part(c):
+        return [r[0] for r in c.execute(sa.select(badges.c.code).where(badges.c.user_id == uid))]
+
+    (due, allm, ok, tot, used), days, (gs, hw, covered), bs = par(counts, week, group_part, badge_part)
+    streak = u["streak"] if u["last_daily"] in (today(), today(-1)) else 0
+    return {"user": {"id": uid, "name": u["name"], "book": u["book"], "role": u["role"], "xp": u["xp"],
+                     "ready": bool(u["book"] or gs), "streak": streak, "best_streak": u["best_streak"],
+                     "phone": bool(u["phone"]), "remind": u["remind"]},
+            "level": level(u["xp"]), "levels": [{"need": n, "name": nm} for n, nm in LEVELS],
+            "free": {"limit": FREE_LIMIT, "used": used} if u["role"] == "user" else None,
+            "daily_done": today() in days, "week": [today(-i) in days for i in range(6, -1, -1)],
+            "mistakes_due": due, "mistakes_all": allm, "homework": hw, "groups": gs, "covered": covered,
+            "badges": bs, "stats": {"ok": ok, "total": tot}, "bot": BOT_NAME["v"],
+            "all_badges": [{"code": k, "name": v[0], "desc": v[1]} for k, v in BADGES.items()]}
 
 
 @app.post("/api/me")
@@ -328,25 +370,17 @@ async def me_update(req: Request, u=Depends(auth)):
 
 
 @app.get("/api/topics")
-def topic_list(grade: int = 0, u=Depends(auth)):
-    with engine.begin() as c:
-        cnt = {}
-        for t, k, n in c.execute(sa.select(questions.c.topic_id, questions.c.kind, sa.func.count())
-                                 .where(questions.c.active == sa.true()).group_by(questions.c.topic_id, questions.c.kind)):
-            cnt.setdefault(t, {})[k] = n
-        q = sa.select(topics).order_by(topics.c.ord)
-        if grade:
-            q = q.where(topics.c.grade == grade)
-        grades = sorted({r[0] for r in c.execute(sa.select(topics.c.grade).distinct())})
-        books, seen = [], set()
-        for t in c.execute(sa.select(topics.c.subj, topics.c.grade).order_by(topics.c.ord)):
-            if (t[0], t[1]) not in seen:
-                seen.add((t[0], t[1]))
-                books.append({"id": f"{t[0]}{t[1]}", "subj": t[0], "grade": t[1]})
-        return {"grades": grades, "books": books,
-                "topics": [{"id": t["id"], "subj": t["subj"], "grade": t["grade"], "num": t["num"], "title": t["title"],
-                            "tests": cnt.get(t["id"], {}).get("test", 0), "matches": cnt.get(t["id"], {}).get("match", 0),
-                            "cards": cnt.get(t["id"], {}).get("card", 0)} for t in c.execute(q).mappings()]}
+def topic_list(u=Depends(auth)):
+    books, seen = [], set()
+    for t in TOP:
+        if (t["subj"], t["grade"]) not in seen:
+            seen.add((t["subj"], t["grade"]))
+            books.append({"id": f"{t['subj']}{t['grade']}", "subj": t["subj"], "grade": t["grade"]})
+    n = lambda k, t: len(BYKT.get((k, t), ()))
+    return {"books": books,
+            "topics": [{"id": t["id"], "subj": t["subj"], "grade": t["grade"], "num": t["num"], "title": t["title"],
+                        "tests": n("test", t["id"]), "matches": n("match", t["id"]), "cards": n("card", t["id"])}
+                       for t in TOP]}
 
 
 # ------------------------------------------------------------------ sessions
@@ -368,8 +402,8 @@ def session_payload(c, s, reveal_all=False):
                 p["ok"] = a["ok"]
                 if q["kind"] != "card":
                     p["right"] = q["data"]["a"]
-        elif reveal_all and q["kind"] != "card":
-            p["right"] = q["data"]["a"]
+        elif (reveal_all or reveal) and q["kind"] != "card":
+            p["right"] = q["data"]["a"]   # darhol javob ko'rsatiladigan rejimlarda tekshiruv ilovaning o'zida
         out.append(p)
     left = None
     if s["limit_sec"]:
@@ -446,8 +480,8 @@ async def start(req: Request, u=Depends(auth)):
             raise HTTPException(404, "Bu bo'limda savollar topilmadi")
         r = c.execute(sessions.insert().values(user_id=uid, mode=mode, qids=qids, ans={}, ref=ref, day=today(),
                                                started=now(), limit_sec=limit_sec, total=len(qids)))
-        s = c.execute(sa.select(sessions).where(sessions.c.id == r.inserted_primary_key[0])).mappings().first()
-        return session_payload(c, s)
+        return session_payload(c, {"id": r.inserted_primary_key[0], "mode": mode, "qids": qids, "ans": {},
+                                   "limit_sec": limit_sec, "started": now()})
 
 
 def judge(q, a):
@@ -497,7 +531,9 @@ async def answer(req: Request, u=Depends(auth)):
         c.execute(sessions.update().where(sessions.c.id == s["id"]).values(ans=ans))
         c.execute(answers.insert().values(user_id=uid, qid=qid, ok=ok, mode=s["mode"], day=today(), ts=now()))
         add_xp(c, uid, pts, "ans")
-        m = c.execute(sa.select(mistakes).where(mistakes.c.user_id == uid, mistakes.c.qid == qid)).mappings().first()
+        m = None
+        if not ok or s["mode"] == "mistakes":
+            m = c.execute(sa.select(mistakes).where(mistakes.c.user_id == uid, mistakes.c.qid == qid)).mappings().first()
         if not ok:
             if m:
                 c.execute(mistakes.update().where(mistakes.c.user_id == uid, mistakes.c.qid == qid)
@@ -890,6 +926,9 @@ async def a_question_save(qid: int, req: Request, u=Depends(admin)):
                 raise HTTPException(400, "Savol va javob to'ldirilishi kerak")
             d.update(q=n["q"].strip(), a=n["a"].strip())
         c.execute(questions.update().where(questions.c.id == qid).values(data=d, active=bool(b.get("active", True))))
+    if qid in QS:
+        QS[qid] = dict(QS[qid], data=d, active=bool(b.get("active", True)))
+        reindex()
     return {"ok": True}
 
 
@@ -1086,6 +1125,7 @@ def background():
 @app.on_event("startup")
 def startup():
     db.init(os.path.join(ROOT, "content", "topics.json"))
+    load_content()
     if BOT_TOKEN and os.environ.get("NO_TG") != "1":
         r = tg("getMe")
         if r and r.get("ok"):
