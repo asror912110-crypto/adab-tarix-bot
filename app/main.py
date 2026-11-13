@@ -777,6 +777,8 @@ async def t_progress(req: Request, u=Depends(teacher)):
         c.execute(progress.delete().where(progress.c.group_id == g["id"]))
         if last:
             c.execute(progress.insert().values(group_id=g["id"], topic_ids=list(last.values())))
+            if not g["grade"]:   # sinfi ko'rsatilmagan (eski) guruh: sinf belgilangan mavzudan olinadi
+                c.execute(groups.update().where(groups.c.id == g["id"]).values(grade=next(iter(last))[0]))
         # bugungi umumiy to'plam yangi mavzular bo'yicha qayta tuziladi (hali hech kim boshlamagan bo'lsa)
         c.execute(daily_sets.delete().where(daily_sets.c.k == f"g{g['id']}:{today()}"))
     return {"ok": True, "count": len(last)}
