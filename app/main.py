@@ -441,7 +441,7 @@ async def start(req: Request, u=Depends(auth)):
             remaining = FREE_LIMIT - used_today(c, uid)
             if remaining <= 0:
                 raise HTTPException(402, f"Bugungi bepul limit ({FREE_LIMIT} ta savol) tugadi. Ertaga davom eting "
-                                         "yoki Adab School o'quvchisi sifatida telefon raqamingizni tasdiqlang.")
+                                         "yoki o'qituvchingizdan guruh havolasini oling — guruh a'zolarida cheklov yo'q.")
         tids = [t for t in (b.get("topics") or []) if isinstance(t, str)][:80]
         if not tids:
             tids = pool(c, u)
@@ -1038,14 +1038,10 @@ def handle_update(up):
             if ok and u["role"] == "user":
                 vals["role"] = "student"
             c.execute(users.update().where(users.c.id == f["id"]).values(**vals))
-        if ok or u["role"] != "user":
-            tg_send(f["id"], "✅ Raqamingiz tasdiqlandi. Siz <b>Adab School o'quvchisi</b> sifatida barcha "
-                             "imkoniyatlardan cheklovsiz foydalanasiz!", markup={"remove_keyboard": True})
+        if ok and u["role"] == "user":
+            tg_send(f["id"], "✅ Raqamingiz ro'yxatda topildi — cheklovsiz foydalanishingiz mumkin.", markup={"remove_keyboard": True})
         else:
-            tg_send(f["id"], "Raqamingiz saqlandi, lekin u Adab School o'quvchilari ro'yxatida topilmadi. Hozircha "
-                             f"kuniga {FREE_LIMIT} ta savol ishlashingiz mumkin.\n\nAdab School'da o'qisangiz, "
-                             "administratorga murojaat qiling — ro'yxatga qo'shilgach to'liq kirish ochiladi.",
-                    markup={"remove_keyboard": True})
+            tg_send(f["id"], "Rahmat, raqamingiz saqlandi.", markup={"remove_keyboard": True})
         tg_send(f["id"], "Boshlash uchun ilovani oching 👇", app_button=True)
         return
     if text.startswith("/start"):
@@ -1070,10 +1066,10 @@ def handle_update(up):
                          "📅 Har kuni yangi kunlik topshiriq\n"
                          "🧩 Moslashtirish va savol-javob kartochkalari\n"
                          "⚔️ Do'stlar bilan bellashuv va reyting", app_button=True)
-        if not u["phone"]:
-            tg_send(f["id"], "Adab School o'quvchisimisiz? Cheklovsiz foydalanish uchun telefon raqamingizni yuboring 👇",
-                    markup={"keyboard": [[{"text": "📱 Raqamni yuborish", "request_contact": True}]],
-                            "resize_keyboard": True, "one_time_keyboard": True})
+        if u["role"] == "user":
+            tg_send(f["id"], "Adab School o'quvchisimisiz? O'qituvchingizdan guruh havolasini (yoki QR kodini) oling — "
+                             "guruhga qo'shilsangiz, savollar darsda o'tilgan mavzulardan keladi va kunlik cheklov bo'lmaydi.",
+                    markup={"remove_keyboard": True})
     elif text.startswith("/id"):
         tg_send(f["id"], f"Sizning ID: <code>{f['id']}</code>")
     else:

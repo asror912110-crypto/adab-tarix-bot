@@ -236,7 +236,7 @@ const startSession = guard(async params => {
 function limitView(msg) {
   show(h('div', null, header('Bugunga yetarli 🙂', null, () => go('home')), h('div', { class: 'wrap' },
     h('div', { class: 'card' }, h('p', { class: 'bold', style: 'margin-top:0' }, msg),
-      h('p', { class: 'mute sm' }, 'Raqamni tasdiqlash: botga /start yuboring va «📱 Raqamni yuborish» tugmasini bosing.')),
+      h('p', { class: 'mute sm' }, 'O‘quv markazida o‘qisangiz, o‘qituvchingizdan guruh havolasini oling — guruh a’zolarida cheklov yo‘q.')),
     h('button', { class: 'btn mt2', onclick: () => go('home') }, 'Asosiy sahifaga'))));
 }
 function play(s) {
@@ -576,7 +576,7 @@ async function adminHome() {
         h('button', { class: 'li', onclick: guard(adminReports) }, h('div', { class: 'n' }, '⚑'), h('div', { class: 't' }, h('b', null, 'Savoldagi xatolar haqida xabarlar')), s.reports_new ? h('span', { class: 'badge' }, s.reports_new) : h('span', { class: 'mute' }, '›')),
         h('button', { class: 'li', onclick: () => guard(adminTopics)() }, h('div', { class: 'n' }, '✏️'), h('div', { class: 't' }, h('b', null, 'Savollarni tahrirlash')), h('span', { class: 'mute' }, '›')),
         h('button', { class: 'li', onclick: () => adminUsers() }, h('div', { class: 'n' }, '👤'), h('div', { class: 't' }, h('b', null, 'Foydalanuvchilar va rollar')), h('span', { class: 'mute' }, '›')),
-        h('button', { class: 'li', onclick: adminWhitelist }, h('div', { class: 'n' }, '📱'), h('div', { class: 't' }, h('b', null, 'O‘quvchilar ro‘yxati (telefon)'), h('small', null, s.whitelist + ' ta raqam')), h('span', { class: 'mute' }, '›'))))));
+        h('button', { class: 'li', onclick: adminWhitelist }, h('div', { class: 'n' }, '📱'), h('div', { class: 't' }, h('b', null, 'Guruhsiz o‘quvchilar (telefon ro‘yxati)'), h('small', null, s.whitelist + ' ta raqam')), h('span', { class: 'mute' }, '›'))))));
 }
 function qEditor(q, after) {
   const d = JSON.parse(JSON.stringify(q.data)); let active = q.active;
@@ -632,7 +632,7 @@ function adminUsers(q) {
 }
 function adminWhitelist() {
   let ta;
-  show(h('div', null, header('O‘quvchilar ro‘yxati', 'Shu raqamlar egasi botda cheklovsiz foydalanadi', () => guard(adminHome)()),
+  show(h('div', null, header('Telefon ro‘yxati', 'Ixtiyoriy: guruhga qo‘shilmagan odamga ham cheklovsiz kirish berish uchun', () => guard(adminHome)()),
     h('div', { class: 'wrap' }, h('div', { class: 'sm mute' }, 'Har qatorga bitta telefon raqami (ism yozish ixtiyoriy). EduTizim’dan eksport qilingan ro‘yxatni shu yerga joylashtiring.'),
       ta = h('textarea', { class: 'field mt', style: 'min-height:220px', placeholder: '+998 90 123 45 67 Aliyev Vali\n901234568' }),
       h('button', { class: 'btn mt', onclick: guard(async () => { const r = await api('/a/whitelist', { text: ta.value }); toast(r.added + ' ta raqam qo‘shildi, ' + r.upgraded + ' kishi o‘quvchiga aylandi. Jami: ' + r.total); ta.value = ''; }) }, 'Ro‘yxatga qo‘shish'))));

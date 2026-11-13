@@ -44,12 +44,13 @@ oldiga HTTPS (masalan Caddy) qo‘ying.
 | Rol | Kim | Imkoniyat |
 |---|---|---|
 | Mehmon | Istalgan kishi | Kuniga `FREE_LIMIT` (20) ta savol |
-| O‘quvchi | Telefoni ro‘yxatda bor | Cheklovsiz |
+| O‘quvchi | Guruhga qo‘shilgan | Cheklovsiz |
 | O‘qituvchi | Admin tayinlaydi | Guruh, uyga vazifa, natijalar |
 | Admin | `ADMIN_IDS` | Savollarni tahrirlash, rollar, ro‘yxat, shikoyatlar |
 
-**O‘quvchilar ro‘yxati:** Admin paneli → «O‘quvchilar ro‘yxati» ga EduTizim’dan olingan telefon
-raqamlarini joylashtiring. O‘quvchi botda «📱 Raqamni yuborish» tugmasini bossa, avtomatik tasdiqlanadi.
+**Cheklovsiz kirish:** o‘qituvchi guruh ochadi va havola yoki QR kodni o‘quvchilarga beradi. Guruhga
+qo‘shilgan har bir kishi avtomatik «o‘quvchi» bo‘ladi. Telefon ro‘yxati (Admin paneli) ixtiyoriy — guruhsiz
+odamga ham cheklovsiz kirish berish kerak bo‘lsa ishlatiladi.
 
 ## Ball tizimi
 
