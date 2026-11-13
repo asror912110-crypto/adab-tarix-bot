@@ -944,8 +944,10 @@ def send_reminders():
 
 
 @app.get("/cron/remind")
-def cron_remind(key: str):
-    if key != SECRET:
+def cron_remind(key: str = ""):
+    # Kuniga bir marta ishlaydi (takror chaqiruvlar e'tiborsiz qoladi). Kalitsiz chaqiruv faqat
+    # eslatma soatidan keyin qabul qilinadi — tashqi jadval (GitHub Actions) shu yo'ldan foydalanadi.
+    if key != SECRET and dt.datetime.now(TZ).hour < REMIND_HOUR:
         raise HTTPException(403)
     return {"sent": send_reminders()}
 

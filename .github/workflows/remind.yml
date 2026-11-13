@@ -1,0 +1,13 @@
+name: Kunlik eslatma
+on:
+  schedule:
+    - cron: "7 13 * * *"   # har kuni 18:07 (Toshkent)
+  workflow_dispatch:
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Serverni uyg'otish va eslatmalarni yuborish
+        run: |
+          curl -sS --retry 5 --retry-delay 20 --max-time 120 https://adab-tarix-bot.onrender.com/healthz
+          curl -sS --max-time 300 https://adab-tarix-bot.onrender.com/cron/remind
